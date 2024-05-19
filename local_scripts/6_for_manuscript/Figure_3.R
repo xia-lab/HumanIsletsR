@@ -8,7 +8,7 @@ library(RSQLite)
 library(ggplot2)
 
 source("../set_paths.R")
-source("/Users/jessicaewald/NetbeansProjects/restxialab/src/main/webapp/resources/rscripts/humanislets_statistics.R")
+source("HumanIsletsR/web_tool_functions/humanislets_statistics.R") # put path to your local HumanIsletR repository
 setPaths()
 
 # get data

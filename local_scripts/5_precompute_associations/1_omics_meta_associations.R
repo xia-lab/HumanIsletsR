@@ -15,7 +15,7 @@ raw.omics.path <- paste0(other.tables.path, "omics_processing_input/raw/")
 proc.omics.path <- paste0(other.tables.path, "omics_processing_input/proc/")
 
 # use same functions as used by web-tool
-source(paste0(restapi.path, "src/main/webapp/resources/rscripts/humanislets_statistics.R"))
+source("HumanIsletsR/web_tool_functions/humanislets_statistics.R") # put path to your local HumanIsletsR directory
 source(paste0(restapi.path, "src/main/webapp/resources/rscripts/filepath_utils.R"))
 
 # read in covariates

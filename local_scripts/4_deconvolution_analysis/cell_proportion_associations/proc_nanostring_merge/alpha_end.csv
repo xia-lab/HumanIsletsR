@@ -1,0 +1,153 @@
+"Feature","Coefficient","Average level","T_statistic","P_value","Adjusted p_value","Associated proportions","Gene_ID","Description","sig","negLogPval"
+"GCG",16,9.95,7.52,3.36e-11,5.24e-09,"None","2641","glucagon","up",10.4736607226102
+"CHGA",9.17,6.36,4.48,2.16e-05,0.00168,"None","1113","chromogranin A","up",4.66554624884907
+"B2M",8.07,6.5,4.36,3.41e-05,0.00177,"None","567","beta-2-microglobulin","up",4.4672456210075
+"ARX",9.88,0.716,4.04,0.000108,0.00422,"None","170302","aristaless related homeobox","up",3.96657624451305
+"CHGB",9.14,6.43,3.92,0.000167,0.00521,"None","1114","chromogranin B","up",3.77728352885242
+"KIT",17.8,-2.34,3.35,0.00141,0.0367,"None","3815","KIT proto-oncogene, receptor tyrosine kinase","up",2.85078088734462
+"FOXE1",-9.73,-2.52,-3.18,0.00198,0.0441,"None","2304","forkhead box E1","down",2.70333480973847
+"RBPJ",6.97,0.371,3.12,0.00243,0.0474,"None","3516","recombination signal binding protein for immunoglobulin kappa J region","up",2.61439372640169
+"UCN3",7.32,0.651,2.98,0.00367,0.0634,"None","114131","urocortin 3","NS",2.43533393574791
+"HAND1",8.86,-2.78,2.95,0.00406,0.0634,"None","9421","heart and neural crest derivatives expressed 1","NS",2.39147396642281
+"OTX2",-11.3,-2.4,-2.91,0.00457,0.0637,"--","5015","orthodenticle homeobox 2","NS",2.34008379993015
+"HNF4A",4.57,-0.559,2.88,0.0049,0.0637,"None","3172","hepatocyte nuclear factor 4 alpha","NS",2.30980391997149
+"SLC2A2",-7.34,-0.513,-2.78,0.00657,0.0788,"None","6514","solute carrier family 2 member 2","NS",2.18243463044022
+"CXCR4",9.14,-2.37,2.74,0.00731,0.0814,"None","7852","C-X-C motif chemokine receptor 4","NS",2.13608262304214
+"PDX1",-7.88,-0.495,-2.67,0.00884,0.0862,"None","3651","pancreatic and duodenal homeobox 1","NS",2.05354773498693
+"GLP1R",-5.03,0.272,-2.67,0.00903,0.0862,"None","2740","glucagon like peptide 1 receptor","NS",2.04431224968649
+"WT1",17.2,-4.05,2.69,0.00939,0.0862,"None","7490","WT1 transcription factor","NS",2.02733440773389
+"SOX2",-8.5,-2.36,-2.63,0.00998,0.0865,"None","6657","SRY-box transcription factor 2","NS",2.00086945871263
+"DPY30",-3.8,1.61,-2.36,0.0218,0.179,"None","84661","dpy-30 histone methyltransferase complex regulatory subunit","NS",1.6615435063954
+"CCL22",10.4,-1.45,2.29,0.0255,0.19,"None","6367","C-C motif chemokine ligand 22","NS",1.59345981956604
+"GSC",7.04,-2.68,2.24,0.0272,0.193,"None","145258","goosecoid homeobox","NS",1.5654310959658
+"NPAS4",-4.54,-0.624,-2.19,0.0311,0.21,"None","266743","neuronal PAS domain protein 4","NS",1.50723961097316
+"HADH",-4.07,3.77,-2.17,0.0329,0.21,"Endocrine","3033","hydroxyacyl-CoA dehydrogenase","NS",1.48280410205003
+"ASH2L",3.14,0.188,2.15,0.034,0.21,"--","9070","ASH2 like, histone lysine methyltransferase complex subunit","NS",1.46852108295774
+"FOXD3",-8.36,-2.2,-2.14,0.035,0.21,"None","27022","forkhead box D3","NS",1.45593195564972
+"PAX4",6.47,-2.72,2.11,0.0374,0.216,"None","5078","paired box 4","NS",1.42712839779952
+"ZIC1",5.89,-3.5,2.06,0.0417,0.233,"--","7545","Zic family member 1","NS",1.37986394502624
+"WDR5",-2.25,0.0134,-2.02,0.0464,0.25,"--","11091","WD repeat domain 5","NS",1.33348201944512
+"PECAM1",4.87,0.171,1.99,0.0494,0.257,"None","5175","platelet and endothelial cell adhesion molecule 1","NS",1.30627305107635
+"EIF5B",4.16,0.486,1.97,0.0565,0.284,"None","9669","eukaryotic translation initiation factor 5B","NS",1.24795155218056
+"FABP2",6.64,-2.95,1.76,0.0819,0.388,"None","2169","fatty acid binding protein 2","NS",1.08671609823958
+"VEGFA",-4.52,2.91,-1.78,0.0834,0.388,"--","7422","vascular endothelial growth factor A","NS",1.07883394936226
+"SST",5.58,7.21,1.74,0.0847,0.388,"Endocrine","6750","somatostatin","NS",1.07211658966929
+"ATP2A2",-4.34,0.705,-1.75,0.0886,0.393,"--","488","ATPase sarcoplasmic/endoplasmic reticulum Ca2+ transporting 2","NS",1.05256627811295
+"NR5A2",-5.59,-0.816,-1.71,0.0908,0.393,"Non-endocrine","2494","nuclear receptor subfamily 5 group A member 2","NS",1.04191415147891
+"RBBP5",2.51,0.16,1.69,0.0935,0.394,"None","5929","RB binding protein 5, histone lysine methyltransferase complex subunit","NS",1.02918838912748
+"ABCC8",-4.51,3.3,-1.66,0.101,0.401,"Endocrine","6833","ATP binding cassette subfamily C member 8","NS",0.995678626217357
+"SOX17",-3.08,-1.07,-1.65,0.103,0.401,"None","64321","SRY-box transcription factor 17","NS",0.987162775294828
+"NANOG",4.27,-2.42,1.65,0.103,0.401,"None","79923","Nanog homeobox","NS",0.987162775294828
+"PPY",-8.03,2.46,-1.63,0.107,0.402,"None","5539","pancreatic polypeptide","NS",0.97061622231479
+"OSR1",5.5,-3.08,1.61,0.111,0.402,"None","130497","odd-skipped related transcription factor 1","NS",0.954677021213343
+"GAPDH",2.82,4.95,1.6,0.113,0.402,"None","2597","glyceraldehyde-3-phosphate dehydrogenase","NS",0.94692155651658
+"OTX1",4.26,-2.03,1.6,0.113,0.402,"None","5013","orthodenticle homeobox 1","NS",0.94692155651658
+"PCSK2",3.05,3.94,1.53,0.129,0.443,"None","5126","proprotein convertase subtilisin/kexin type 2","NS",0.889410289700751
+"G6PC2",-5.12,3.61,-1.52,0.132,0.443,"None","57818","glucose-6-phosphatase catalytic subunit 2","NS",0.87942606879415
+"CYP2E1",5.58,-1.85,1.52,0.137,0.443,"None","1571","cytochrome P450 family 2 subfamily E member 1","NS",0.863279432843593
+"ITPR1",4.59,-0.499,1.51,0.139,0.443,"None","3708","inositol 1,4,5-trisphosphate receptor type 1","NS",0.856985199745905
+"LDHA",4.08,1.26,1.49,0.139,0.443,"Non-endocrine","3939","lactate dehydrogenase A","NS",0.856985199745905
+"HK2",4.04,-0.992,1.48,0.143,0.447,"None","3099","hexokinase 2","NS",0.844663962534938
+"CPE",3.38,6.59,1.46,0.148,0.452,"None","1363","carboxypeptidase E","NS",0.829738284605043
+"NEUROG3",4.77,-2.67,1.4,0.166,0.498,"None","50674","neurogenin 3","NS",0.779891911959945
+"MAFB",-3.07,0.815,-1.36,0.179,0.525,"None","9935","MAF bZIP transcription factor B","NS",0.747146969020107
+"PCSK1N",4.08,4.21,1.36,0.183,0.529,"None","27344","proprotein convertase subtilisin/kexin type 1 inhibitor","NS",0.737548910269571
+"CYP1A1",10.3,-3.24,1.33,0.19,0.539,"None","1543","cytochrome P450 family 1 subfamily A member 1","NS",0.721246399047171
+"RBPJL",5.79,-1.05,1.31,0.194,0.539,"Non-endocrine","11317","recombination signal binding protein for immunoglobulin kappa J region like","NS",0.712198270069774
+"ZFP42",-3.33,-1.63,-1.26,0.209,0.564,"None","132625","ZFP42 zinc finger protein","NS",0.679853713888946
+"GATA2",-2.77,-2.18,-1.26,0.21,0.564,"Non-endocrine","2624","GATA binding protein 2","NS",0.677780705266081
+"INSM1",3.05,1.86,1.24,0.219,0.569,"Endocrine","3642","INSM transcriptional repressor 1","NS",0.659555885159882
+"MAFA",-2.66,0.505,-1.23,0.223,0.569,"Endocrine","389692","MAF bZIP transcription factor A","NS",0.651695136951839
+"AMY2A",-9.74,6.05,-1.22,0.226,0.569,"None","279","amylase alpha 2A","NS",0.645891560852599
+"TBP",2.4,-0.86,1.22,0.227,0.569,"--","6908","TATA-box binding protein","NS",0.643974142806877
+"GCK",2.73,0.453,1.21,0.23,0.569,"Endocrine","2645","glucokinase","NS",0.638272163982407
+"UCP2",2.4,-0.448,1.16,0.248,0.603,"None","7351","uncoupling protein 2","NS",0.605548319173784
+"MIXL1",5.07,-3.26,1.15,0.251,0.603,"None","83881","Mix paired-like homeobox","NS",0.600326278518962
+"DKK4",3.67,-2.18,1.14,0.259,0.607,"None","27121","dickkopf WNT signaling pathway inhibitor 4","NS",0.586700235918748
+"EIF2A",2.93,1.81,1.14,0.261,0.607,"--","83939","eukaryotic translation initiation factor 2A","NS",0.583359492661719
+"SLC2A1",2.94,-1.76,1.08,0.283,0.645,"None","6513","solute carrier family 2 member 1","NS",0.54821356447571
+"IAPP",-6.81,6.78,-1.07,0.286,0.645,"None","3375","islet amyloid polypeptide","NS",0.543633966870957
+"HAND2",-3.08,-0.6,-1.05,0.298,0.657,"Non-endocrine","9464","heart and neural crest derivatives expressed 2","NS",0.525783735923745
+"FGF4",3.73,-2.59,1.04,0.299,0.657,"--","2249","fibroblast growth factor 4","NS",0.52432881167557
+"GIPR",-1.97,0.731,-1.02,0.31,0.658,"None","2696","gastric inhibitory polypeptide receptor","NS",0.508638306165727
+"HK1",-2.46,-1.28,-1.02,0.312,0.658,"Non-endocrine","3098","hexokinase 1","NS",0.505845405981557
+"MED15",1.85,0.039,0.986,0.327,0.658,"None","51586","mediator complex subunit 15","NS",0.485452247339714
+"MEOX1",-3.27,-2.36,-0.977,0.331,0.658,"None","4222","mesenchyme homeobox 1","NS",0.480172006224281
+"ALDOB",4.76,0.823,0.974,0.332,0.658,"Non-endocrine","229","aldolase, fructose-bisphosphate B","NS",0.478861916295964
+"KCNK1",2.78,0.179,0.976,0.332,0.658,"None","3775","potassium two pore domain channel subfamily K member 1","NS",0.478861916295964
+"GCGR",-2.41,-0.971,-0.964,0.337,0.658,"None","2642","glucagon receptor","NS",0.472370099128661
+"IL1R1",5.37,-1.58,0.964,0.341,0.658,"None","3554","interleukin 1 receptor type 1","NS",0.467245621007502
+"CDX2",2.61,-2.16,0.956,0.342,0.658,"Non-endocrine","1045","caudal type homeobox 2","NS",0.465973893943865
+"DDIT3",-2.47,3.48,-0.949,0.349,0.658,"None","1649","DNA damage inducible transcript 3","NS",0.45717457304082
+"CDH2",2.35,-0.857,0.939,0.35,0.658,"None","1000","cadherin 2","NS",0.455931955649724
+"KDR",3.57,-0.546,0.933,0.355,0.658,"None","3791","kinase insert domain receptor","NS",0.449771646944906
+"HHEX",-1.75,0.409,-0.907,0.367,0.658,"None","3087","hematopoietically expressed homeobox","NS",0.435333935747911
+"PDGFRA",2.89,-0.831,0.902,0.369,0.658,"None","5156","platelet derived growth factor receptor alpha","NS",0.43297363384094
+"BHLHA15",-3.17,-0.44,-0.899,0.371,0.658,"Non-endocrine","168620","basic helix-loop-helix family member a15","NS",0.430626090384954
+"PROX1",1.24,0.685,0.899,0.371,0.658,"None","5629","prospero homeobox 1","NS",0.430626090384954
+"POU5F1",-1.84,-1.79,-0.86,0.392,0.688,"None","5460","POU class 5 homeobox 1","NS",0.406713932979543
+"NR4A1",2.33,1.77,0.848,0.399,0.691,"None","3164","nuclear receptor subfamily 4 group A member 1","NS",0.399027104313252
+"PTF1A",-2.99,-0.664,-0.809,0.421,0.721,"Non-endocrine","256297","pancreas associated transcription factor 1a","NS",0.375717904164332
+"ISL1",2.62,-0.0225,0.783,0.435,0.738,"None","3670","ISL LIM homeobox 1","NS",0.361510743045363
+"GLIS3",-1.17,1.25,-0.76,0.449,0.749,"Endocrine","169792","GLIS family zinc finger 3","NS",0.347753658996677
+"AFP",2.63,-3.05,0.756,0.451,0.749,"None","174","alpha fetoprotein","NS",0.345823458122039
+"RFX6",1.71,0.312,0.736,0.464,0.761,"None","222546","regulatory factor X6","NS",0.333482019445119
+"LDB1",-1.07,1.09,-0.727,0.469,0.763,"--","8861","LIM domain binding 1","NS",0.328827157284917
+"CYP3A4",4.3,-3.32,0.706,0.485,0.779,"None","1576","cytochrome P450 family 3 subfamily A member 4","NS",0.314258261397736
+"KMT2A",1.81,1.15,0.678,0.5,0.789,"None","4297","lysine methyltransferase 2A","NS",0.301029995663981
+"SCG5",1.81,4.86,0.672,0.506,0.789,"None","6447","secretogranin V","NS",0.295849483160201
+"HNF1A",1.99,-2.21,0.667,0.506,0.789,"None","6927","HNF1 homeobox A","NS",0.295849483160201
+"NEUROD1",1.75,2.38,0.656,0.513,0.789,"None","4760","neuronal differentiation 1","NS",0.289882634888184
+"EPAS1",1.03,1.52,0.64,0.524,0.789,"None","2034","endothelial PAS domain protein 1","NS",0.280668713016273
+"HPRT1",1.02,1.86,0.64,0.524,0.789,"--","3251","hypoxanthine phosphoribosyltransferase 1","NS",0.280668713016273
+"DPPA4",2.84,-4.6,0.634,0.529,0.789,"--","55211","developmental pluripotency associated 4","NS",0.276544327964814
+"GATA4",-2.04,-1.42,-0.628,0.531,0.789,"Non-endocrine","2626","GATA binding protein 4","NS",0.274905478918531
+"RYR2",3.01,-1.85,0.617,0.541,0.789,"None","6262","ryanodine receptor 2","NS",0.266802734893431
+"GUSB",0.988,0.613,0.611,0.543,0.789,"--","2990","glucuronidase beta","NS",0.265200170411153
+"ALDH1A3",-2.18,-0.39,-0.606,0.546,0.789,"None","220","aldehyde dehydrogenase 1 family member A3","NS",0.262807357295263
+"HNF1B",1.24,-0.192,0.577,0.566,0.8,"None","6928","HNF1 homeobox B","NS",0.247183568811729
+"KCNJ11",1.19,-1.41,0.571,0.569,0.8,"None","3767","potassium inwardly rectifying channel subfamily J member 11","NS",0.244887733604929
+"SIX3",-1.57,-1.93,-0.568,0.572,0.8,"None","6496","SIX homeobox 3","NS",0.242603971206976
+"EIF2D",1.47,0.438,0.567,0.574,0.8,"--","1939","eukaryotic translation initiation factor 2D","NS",0.241088107602027
+"INSR",-1,1.71,-0.53,0.597,0.818,"Non-endocrine","3643","insulin receptor","NS",0.224025668870631
+"ARNT",-0.651,0.325,-0.53,0.597,0.818,"None","405","aryl hydrocarbon receptor nuclear translocator","NS",0.224025668870631
+"KMT2C",-0.658,1.47,-0.476,0.635,0.859,"None","58508","lysine methyltransferase 2C","NS",0.197226274708024
+"PCSK1",1.4,3.73,0.468,0.641,0.859,"None","5122","proprotein convertase subtilisin/kexin type 1","NS",0.193141970481183
+"SLC16A1",-1.19,-1.93,-0.464,0.644,0.859,"None","6566","solute carrier family 16 member 1","NS",0.191114132640188
+"KMT2D",-0.744,0.311,-0.439,0.662,0.875,"None","8085","lysine methyltransferase 2D","NS",0.1791420105603
+"PAX6",0.851,3.06,0.412,0.681,0.877,"None","5080","paired box 6","NS",0.166852888087215
+"FOXO1",-0.494,1.85,-0.41,0.682,0.877,"--","2308","forkhead box O1","NS",0.166215625343521
+"CDH1",0.73,2.82,0.409,0.683,0.877,"None","999","cadherin 1","NS",0.165579296318467
+"MYC",-1.04,0.0106,-0.399,0.691,0.877,"Non-endocrine","4609","MYC proto-oncogene, bHLH transcription factor","NS",0.160521952625802
+"MNX1",0.845,-1.52,0.385,0.701,0.882,"None","3110","motor neuron and pancreas homeobox 1","NS",0.154281982033341
+"HSPA5",1.66,2.12,0.379,0.707,0.882,"None","3309","heat shock protein family A (Hsp70) member 5","NS",0.150580586203101
+"IGF1R",-1.09,1.02,-0.372,0.712,0.882,"None","3480","insulin like growth factor 1 receptor","NS",0.147520006363144
+"ITPR2",1.08,-0.306,0.353,0.726,0.891,"None","3709","inositol 1,4,5-trisphosphate receptor type 2","NS",0.139063379299906
+"SOX9",1.12,0.3,0.344,0.731,0.891,"Non-endocrine","6662","SRY-box transcription factor 9","NS",0.13608262304214
+"IGF2",-1.79,0.627,-0.316,0.754,0.906,"None","3481","insulin like growth factor 2","NS",0.122628654130226
+"ALB",-1.39,1.96,-0.303,0.763,0.906,"Non-endocrine","213","albumin","NS",0.11747546204512
+"POU3F4",-0.903,-3.14,-0.302,0.763,0.906,"--","5456","POU class 3 homeobox 4","NS",0.11747546204512
+"KCNK3",0.496,0.255,0.29,0.772,0.906,"--","3777","potassium two pore domain channel subfamily K member 3","NS",0.112382699664264
+"FGF2",-1.01,-0.863,-0.278,0.781,0.906,"None","2247","fibroblast growth factor 2","NS",0.1073489661227
+"HIF1A",-0.502,2.77,-0.27,0.787,0.906,"None","3091","hypoxia inducible factor 1 subunit alpha","NS",0.104025267640935
+"INS",-0.982,12.6,-0.268,0.789,0.906,"None","3630","insulin","NS",0.10292299679058
+"PAM",0.827,3.92,0.249,0.804,0.916,"None","5066","peptidylglycine alpha-amidating monooxygenase","NS",0.0947439512515487
+"EOMES",0.591,-1.81,0.19,0.85,0.959,"None","8320","eomesodermin","NS",0.0705810742857073
+"CACNA1D",-0.355,1.15,-0.184,0.855,0.959,"None","776","calcium voltage-gated channel subunit alpha1 D","NS",0.0680338852718274
+"GATA6",0.472,0.0419,0.168,0.867,0.96,"Non-endocrine","2627","GATA binding protein 6","NS",0.0619809025237897
+"CPA1",0.741,8.26,0.147,0.883,0.96,"Non-endocrine","1357","carboxypeptidase A1","NS",0.0540392964224314
+"FOXA1",-0.556,-2.12,-0.142,0.887,0.96,"None","3169","forkhead box A1","NS",0.0520763801682736
+"FOXA2",0.183,1.6,0.137,0.891,0.96,"--","3170","forkhead box A2","NS",0.0501222959631252
+"IGF1",-0.777,-1.98,-0.137,0.891,0.96,"None","3479","insulin like growth factor 1","NS",0.0501222959631252
+"GHRL",0.655,1.5,0.135,0.893,0.96,"None","51738","ghrelin and obestatin prepropeptide","NS",0.0491485411114536
+"GAST",0.351,-1.93,0.112,0.911,0.974,"None","2520","gastrin","NS",0.0404816230270017
+"POLR2A",0.113,1.74,0.0903,0.928,0.985,"None","5430","RNA polymerase II subunit A","NS",0.0324520237811379
+"SOX4",-0.252,-1.3,-0.0808,0.936,0.986,"None","6659","SRY-box transcription factor 4","NS",0.0287241512618947
+"IGF2R",-0.172,-0.33,-0.0594,0.953,0.997,"None","3482","insulin like growth factor 2 receptor","NS",0.0209070993616736
+"ITPR3",0.13,0.795,0.0448,0.965,0.997,"None","3710","inositol 1,4,5-trisphosphate receptor type 3","NS",0.0154726866562074
+"ONECUT1",0.0757,-2.54,0.0219,0.983,0.997,"Non-endocrine","3175","one cut homeobox 1","NS",0.00744648216786438
+"ATP2A3",-0.0652,2.27,-0.0172,0.986,0.997,"Endocrine","489","ATPase sarcoplasmic/endoplasmic reticulum Ca2+ transporting 3","NS",0.00612308505878879
+"KMT2B",-0.0309,-0.25,-0.0145,0.988,0.997,"None","9757","lysine methyltransferase 2B","NS",0.00524305541237188
+"FGF17",-0.0182,-2.18,-0.0062,0.995,0.997,"None","8822","fibroblast growth factor 17","NS",0.00217691925427455
+"SLC30A8",0.0111,3.37,0.00505,0.996,0.997,"None","169026","solute carrier family 30 member 8","NS",0.00174066157630127
+"AHR",0.0127,1.11,0.00391,0.997,0.997,"None","196","aryl hydrocarbon receptor","NS",0.00130484168834428

@@ -19,6 +19,7 @@ setPaths <- function(){
     h5.path <<- "/Users/jessicaewald/hdf5/"
     other.tables.path <<- "/Users/jessicaewald/Desktop/RestTest/resources/humanislets/"
     restapi.path <<- "/Users/jessicaewald/NetbeansProjects/restxialab/"
+    r.path <<- "/Users/jessicaewald/NetbeansProjects/restxialab/src/main/webapp/resources/rscripts/HumanIsletsR/web_tool_functions"
   } else {
     print("Please set your local paths for this computer!")
   }

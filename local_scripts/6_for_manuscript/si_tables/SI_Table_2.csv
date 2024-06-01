@@ -1,121 +1,120 @@
 "Metadata","Bulk gene expression (Nanostring)","Bulk gene expression (RNA-seq)","Bulk protein expression","Pseudobulk gene expression (alpha cells)","Pseudobulk gene expression (beta cells)","Single-cell gene expression"
-"Age (years)",5,104,33,0,0,NA
+"Age (years)",39,105,46,0,0,NA
 "BMI",1,0,0,0,0,NA
-"HbA1c (%)",1,23,941,0,13,NA
-"Cold Ischemic Time (h)",1,0,75,0,0,NA
-"Pancreas weight (g)",0,0,0,0,0,NA
-"Digestion time (min)",0,0,1,0,0,NA
-"Total islet equivalents (IEQ)",5,817,3,0,0,NA
-"Islet equivalents per pancreas weight (IEQ/g)",0,489,3,0,0,NA
-"Purity (%)",43,2439,2409,2,0,NA
-"Trapped (%)",49,1835,436,0,53,NA
-"Islet particle index",8,0,84,0,0,NA
-"Insulin content (ug)",0,0,0,0,0,NA
-"DNA content (ug)",0,0,3,7,0,NA
-"Insulin:DNA ratio",13,1,1,0,0,NA
-"Insulin per IEQ (ng/IEQ)",1,0,0,1,0,NA
-"Non-endocrine cell proportion (computed)",18,1503,3671,0,0,NA
-"β-cell proportion (of endocrine; computed)",28,1425,1208,0,0,NA
-"α-cell proportion (of endocrine; computed)",21,479,869,0,0,NA
-"Culture time (h)",34,7489,1,0,0,NA
-"Total islet eqivalents after culture (IEQ)",17,295,69,0,0,NA
-"Percent IEQ recovery after culture (%)",0,0,0,1,0,NA
+"HbA1c (%)",94,5,781,0,5,NA
+"Cold Ischemic Time (h)",0,2,2,0,0,NA
+"Pancreas weight (g)",26,0,0,0,1,NA
+"Digestion time (min)",52,0,1,0,0,NA
+"Total islet equivalents (IEQ)",64,467,0,0,3,NA
+"Islet equivalents per pancreas weight (IEQ/g)",36,587,0,0,0,NA
+"Purity (%)",98,2245,2414,2,0,NA
+"Trapped (%)",91,1604,479,0,110,NA
+"Islet particle index",6,0,60,0,0,NA
+"Insulin content (ug)",61,0,0,0,0,NA
+"DNA content (ug)",50,0,0,0,0,NA
+"Insulin:DNA ratio",81,0,17,0,6,NA
+"Insulin per IEQ (ng/IEQ)",0,0,0,1,0,NA
+"Non-endocrine cell proportion (computed)",47,1212,3673,6,4,NA
+"β-cell proportion (of endocrine; computed)",10,680,1328,0,0,NA
+"α-cell proportion (of endocrine; computed)",8,311,914,0,0,NA
+"Culture time (h)",30,7547,1,0,0,NA
+"Total islet eqivalents after culture (IEQ)",62,134,0,0,0,NA
+"Percent IEQ recovery after culture (%)",0,0,0,0,0,NA
 "Islet particle index after culture",3,0,0,0,0,NA
-"Insulin content after culture (ug)",0,0,0,132,31,NA
-"Insulin:DNA ratio after culture",0,2,2,0,0,NA
-"Insulin per IEQ after culture (ng/IEQ)",0,0,9,0,0,NA
-"Culture time before experiment (days)",16,2450,0,0,0,NA
-"Insulin content (pg/ml)",0,1,1,0,0,NA
-"Secretion at 1 mM glucose (pg/ml)",0,0,1,0,1,NA
-"Secretion at 2.8 mM glucose (pg/ml)",0,0,0,0,0,NA
-"Secretion at 10 mM glucose (pg/ml)",1,0,6,0,0,NA
-"Secretion at 16.7 mM glucose (pg/ml)",3,37,11,0,0,NA
-"Stimulation index (1->10 mM glucose)",7,0,4,0,0,NA
-"Stimulation index (1->16.7 mM glucose)",0,0,0,0,0,NA
-"Stimulation index (2.8->16.7 mM glucose)",4,0,2,1,0,NA
-"Basal respiration",1,NA,NA,NA,NA,NA
+"Insulin content after culture (ug)",66,0,0,0,0,NA
+"Insulin:DNA ratio after culture",77,0,2,0,2,NA
+"Insulin per IEQ after culture (ng/IEQ)",0,0,0,0,0,NA
+"Culture time before experiment (days)",43,7923,88,0,0,NA
+"Insulin content (pg/ml)",5,2,3,0,0,NA
+"Secretion at 1 mM glucose (pg/ml)",0,0,1,0,0,NA
+"Secretion at 2.8 mM glucose (pg/ml)",0,0,4,0,0,NA
+"Secretion at 10 mM glucose (pg/ml)",2,0,8,0,0,NA
+"Secretion at 16.7 mM glucose (pg/ml)",2,6,21,0,0,NA
+"Stimulation index (1->10 mM glucose)",8,0,4,0,0,NA
+"Stimulation index (1->16.7 mM glucose)",4,0,0,1,0,NA
+"Stimulation index (2.8->16.7 mM glucose)",1,0,2,1,0,NA
+"Basal respiration",6,NA,NA,NA,NA,NA
 "ATP-linked respiration",3,NA,NA,NA,NA,NA
 "Proton leak",0,NA,NA,NA,NA,NA
-"Max glucose response",0,NA,NA,NA,NA,NA
+"Max glucose response",2,NA,NA,NA,NA,NA
 "Stimulated glucose response",0,NA,NA,NA,NA,NA
 "Max respiration",0,NA,NA,NA,NA,NA
 "Spare capacity",0,NA,NA,NA,NA,NA
-"3 mM Glucose baseline secretion (AUC)",0,0,758,0,0,NA
-"15 mM Glucose-stimulated peak",0,0,436,0,0,NA
-"15 mM Glucose-stimulated secretion (AUC)",0,0,643,0,0,NA
-"6 mM Glucose-stimulated secretion (AUC)",0,0,834,0,0,NA
-"30 mM KCl-stimulated secretion, after glucose (AUC)",0,0,731,0,0,NA
-"5 mM Leucine-stimulated peak secretion",0,0,0,0,0,NA
-"5 mM Leucine-stimulated secretion (AUC)",0,0,110,0,0,NA
-"5 mM Leucine + 6 mM Glucose-stimulated secretion (AUC)",0,0,891,0,0,NA
-"30 mM KCl-stimulated secretion, after leucine (AUC)",0,0,800,0,0,NA
-"1.5 mM Oleate/palmitate-stimulated peak secretion",0,0,1187,0,0,NA
-"1.5 mM Oleate/palmitate-stimulated secretion (AUC)",2,0,1252,0,0,NA
-"1.5 mM Oleate/palmitate + 6 mM Glucose-stimulated secretion (AUC)",0,0,145,0,0,NA
-"30 mM KCl-stimulated secretion, after oleate palmetate (AUC)",0,0,538,0,0,NA
-"Sex, Male-Female",0,23,20,12,8,NA
-"Diabetes diagnosis, Type2-None",37,779,1558,0,NA,NA
-"Corrected diabetes status, Pre.T2D-None",0,0,0,0,0,NA
-"Corrected diabetes status, Type2-None",31,336,1455,1,0,NA
-"HLA A2, Positive-Negative",0,0,109,0,NA,NA
+"3 mM Glucose baseline secretion (AUC)",1,0,889,0,0,NA
+"15 mM Glucose-stimulated peak",18,0,397,0,0,NA
+"15 mM Glucose-stimulated secretion (AUC)",15,0,567,0,0,NA
+"6 mM Glucose-stimulated secretion (AUC)",14,0,774,0,0,NA
+"30 mM KCl-stimulated secretion, after glucose (AUC)",0,0,836,0,0,NA
+"5 mM Leucine-stimulated peak secretion",12,1,53,0,0,NA
+"5 mM Leucine-stimulated secretion (AUC)",0,0,191,0,0,NA
+"5 mM Leucine + 6 mM Glucose-stimulated secretion (AUC)",9,0,832,0,0,NA
+"30 mM KCl-stimulated secretion, after leucine (AUC)",0,0,757,0,0,NA
+"1.5 mM Oleate/palmitate-stimulated peak secretion",0,0,1278,0,0,NA
+"1.5 mM Oleate/palmitate-stimulated secretion (AUC)",0,0,1226,0,2,NA
+"1.5 mM Oleate/palmitate + 6 mM Glucose-stimulated secretion (AUC)",0,0,172,2,0,NA
+"30 mM KCl-stimulated secretion, after oleate palmitate (AUC)",0,0,174,0,0,NA
+"Sex, Male-Female",0,27,20,12,8,NA
+"Diabetes diagnosis, Type2-None",51,418,1519,0,NA,NA
+"Diabetes diagnosis, Type1-None",106,NA,NA,0,NA,NA
+"Corrected diabetes status, Pre.T2D-None",1,0,0,0,0,NA
+"Corrected diabetes status, Type2-None",40,108,1363,0,0,NA
+"Corrected diabetes status, Type1-None",104,NA,NA,0,NA,NA
+"HLA A2, Positive-Negative",0,0,129,0,NA,NA
 "Fatty infiltration, Yes-No",0,0,0,0,0,NA
-"Diabetes diagnosis, Type1-None",NA,NA,NA,0,NA,NA
-"Corrected diabetes status, Type1-None",NA,NA,NA,0,NA,NA
-"Donation Type, ANOVA",23,5,2,0,0,NA
-"Organ consistency, ANOVA",0,0,0,0,1,NA
-"Collegenase supplier, ANOVA",0,0,20,0,0,NA
-"Collegenase type, ANOVA",0,0,19,259,110,NA
-"Size (pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,1150
-"Size (pF), alpha cells, 5mM glucose",0,0,0,NA,NA,1663
-"Size (pF), alpha cells, 10mM glucose",0,NA,1,NA,NA,816
-"Size (pF), beta cells, 5mM glucose",0,0,0,NA,NA,1172
-"Total exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,NA
-"Total exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,53
-"Total exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,11
-"Total exocytosis (fF/pF), beta cells, 1mM glucose",0,0,0,NA,NA,NA
-"Total exocytosis (fF/pF), beta cells, 5mM glucose",0,0,0,NA,NA,NA
+"Donation Type, ANOVA",19,3,2,1,0,NA
+"Organ consistency, ANOVA",0,0,0,0,2,NA
+"Collegenase supplier, ANOVA",0,0,18,1,0,NA
+"Collegenase type, ANOVA",0,0,19,650,0,NA
+"Size (pF), alpha cells, 1mM glucose",26,NA,1,NA,NA,1146
+"Size (pF), alpha cells, 5mM glucose",0,0,0,NA,NA,1809
+"Size (pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,757
+"Size (pF), beta cells, 1mM glucose",0,NA,8,NA,NA,88
+"Size (pF), beta cells, 5mM glucose",0,0,0,NA,NA,1212
+"Size (pF), beta cells, 10mM glucose",0,NA,NA,NA,NA,167
+"Total exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,1
+"Total exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,1,NA,NA,36
+"Total exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,10
+"Total exocytosis (fF/pF), beta cells, 1mM glucose",0,0,0,NA,NA,0
+"Total exocytosis (fF/pF), beta cells, 5mM glucose",0,0,0,NA,NA,0
 "Total exocytosis (fF/pF), beta cells, 10mM glucose",0,0,0,NA,NA,1
-"Early (RRP) exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,NA
-"Early (RRP) exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,87
-"Early (RRP) exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,21
-"Early (RRP) exocytosis (fF/pF), beta cells, 5mM glucose",0,NA,2,NA,NA,NA
-"Late exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,NA
-"Late exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,7
-"Late exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,NA
-"Late exocytosis (fF/pF), beta cells, 5mM glucose",0,0,0,NA,NA,NA
-"Calcium entry (pC/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,NA
-"Early calcium current amplitude (pA/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,737
-"Early calcium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,258
+"Early (RRP) exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,0
+"Early (RRP) exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,62
+"Early (RRP) exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,15
+"Early (RRP) exocytosis (fF/pF), beta cells, 1mM glucose",0,NA,0,NA,NA,2
+"Early (RRP) exocytosis (fF/pF), beta cells, 5mM glucose",0,0,0,NA,NA,0
+"Early (RRP) exocytosis (fF/pF), beta cells, 10mM glucose",0,NA,NA,NA,NA,0
+"Late exocytosis (fF/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,0
+"Late exocytosis (fF/pF), alpha cells, 5mM glucose",0,0,1,NA,NA,13
+"Late exocytosis (fF/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,0
+"Late exocytosis (fF/pF), beta cells, 1mM glucose",0,NA,0,NA,NA,0
+"Late exocytosis (fF/pF), beta cells, 5mM glucose",0,1,0,NA,NA,0
+"Late exocytosis (fF/pF), beta cells, 10mM glucose",0,NA,NA,NA,NA,0
+"Calcium entry (pC/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,0
+"Calcium entry (pC/pF), alpha cells, 5mM glucose",0,NA,0,NA,NA,66
+"Early calcium current amplitude (pA/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,732
+"Early calcium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,1,NA,NA,222
 "Early calcium current amplitude (pA/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,4
-"Early calcium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,NA,NA,NA,56
-"Late calcium current amplitude (pA/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,856
-"Late calcium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,228
-"Late calcium current amplitude (pA/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,41
-"Late calcium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,NA,NA,NA,32
-"Sodium current amplitude (pA/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,783
-"Sodium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,153
-"Sodium current amplitude (pA/pF), alpha cells, 10mM glucose",0,NA,10,NA,NA,77
-"Sodium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,NA,NA,NA,21
-"Half inactivation sodium current (mV), alpha cells, 5mM glucose",1,NA,NA,NA,NA,97
-"Calcium entry (pC/pF), alpha cells, 5mM glucose",NA,NA,0,NA,NA,86
+"Early calcium current amplitude (pA/pF), beta cells, 1mM glucose",0,NA,NA,NA,NA,0
+"Early calcium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,NA,NA,NA,45
+"Late calcium current amplitude (pA/pF), alpha cells, 1mM glucose",2,NA,0,NA,NA,NA
+"Late calcium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,2,NA,NA,NA
+"Late calcium current amplitude (pA/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,NA
+"Late calcium current amplitude (pA/pF), beta cells, 1mM glucose",0,NA,NA,NA,NA,NA
+"Late calcium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,NA,NA,NA,NA
+"Sodium current amplitude (pA/pF), alpha cells, 1mM glucose",0,NA,0,NA,NA,870
+"Sodium current amplitude (pA/pF), alpha cells, 5mM glucose",0,0,0,NA,NA,162
+"Sodium current amplitude (pA/pF), alpha cells, 10mM glucose",0,NA,0,NA,NA,63
+"Sodium current amplitude (pA/pF), beta cells, 1mM glucose",0,NA,NA,NA,NA,1
+"Sodium current amplitude (pA/pF), beta cells, 5mM glucose",0,NA,0,NA,NA,11
+"Half inactivation sodium current (mV), alpha cells, 5mM glucose",0,NA,0,NA,NA,83
+"Half inactivation sodium current (mV), beta cells, 5mM glucose",0,NA,NA,NA,NA,1
 "Calcium entry (pC/pF), alpha cells, 10mM glucose",NA,NA,0,NA,NA,1
-"Size (pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,92
-"Size (pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,168
-"Early (RRP) exocytosis (fF/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,NA
-"Early (RRP) exocytosis (fF/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
-"Late exocytosis (fF/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,NA
-"Late exocytosis (fF/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
 "Calcium entry (pC/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,1
-"Calcium entry (pC/pF), beta cells, 5mM glucose",NA,NA,NA,NA,NA,2
-"Calcium entry (pC/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
-"Early calcium current amplitude (pA/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,NA
-"Early calcium current amplitude (pA/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
-"Late calcium current amplitude (pA/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,NA
-"Late calcium current amplitude (pA/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
-"Sodium current amplitude (pA/pF), beta cells, 1mM glucose",NA,NA,NA,NA,NA,1
+"Calcium entry (pC/pF), beta cells, 5mM glucose",NA,NA,NA,NA,NA,1
+"Calcium entry (pC/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,0
+"Early calcium current amplitude (pA/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,0
 "Sodium current amplitude (pA/pF), beta cells, 10mM glucose",NA,NA,NA,NA,NA,8
-"Half inactivation sodium current (mV), alpha cells, 1mM glucose",NA,NA,NA,NA,NA,5
-"Half inactivation sodium current (mV), alpha cells, 10mM glucose",NA,NA,NA,NA,NA,NA
-"Half inactivation sodium current (mV), beta cells, 1mM glucose",NA,NA,NA,NA,NA,NA
-"Half inactivation sodium current (mV), beta cells, 5mM glucose",NA,NA,NA,NA,NA,2
-"Half inactivation sodium current (mV), beta cells, 10mM glucose",NA,NA,NA,NA,NA,NA
+"Half inactivation sodium current (mV), alpha cells, 1mM glucose",NA,NA,NA,NA,NA,8
+"Half inactivation sodium current (mV), alpha cells, 10mM glucose",NA,NA,NA,NA,NA,0
+"Half inactivation sodium current (mV), beta cells, 1mM glucose",NA,NA,NA,NA,NA,0
+"Half inactivation sodium current (mV), beta cells, 10mM glucose",NA,NA,NA,NA,NA,0

@@ -1,0 +1,8 @@
+**/.DS_Store
+local_scripts/.DS_Store
+.DS_Store
+
+local_scripts/6_for_manuscript/dea_results.csv
+local_scripts/6_for_manuscript/savedAnalysis/*
+local_scripts/6_for_manuscript/deg_count_results/*
+local_scripts/6_for_manuscript/savedAnalysis/*

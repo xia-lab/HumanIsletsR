@@ -12,18 +12,19 @@ performGSEA <- function(funcLib = "kegg", rank.stat = "coef", fdr = 0.05, collap
   fdr <- as.numeric(fdr)
   
   if(mode=="tool"){
-      # set library filepath
-     lib.path <- paste0(other.tables.path, "libraries/");     
-     # process libraries
-      libraryRDS <- readRDS(paste0(lib.path, funcLib, ".rds"))
-      libraryList <- libraryRDS$sets
-      saveRDS(libraryRDS,"savedAnalysis/libraryRDS.rds")
-       saveRDS(libraryList,"savedAnalysis/libraryList.rds")
-        rcmd <- gsub("tool","local",rcmd)
-      write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
-     if(!file.exists("savedAnalysis/performGSEA.R")){
-       dump("performGSEA", file = "savedAnalysis/performGSEA.R",append=T)
-     }
+    # set library filepath
+    lib.path <- paste0(other.tables.path, "libraries/");    
+    
+    # process libraries
+    libraryRDS <- readRDS(paste0(lib.path, funcLib, ".rds"))
+    libraryList <- libraryRDS$sets
+    saveRDS(libraryRDS,"savedAnalysis/libraryRDS.rds")
+    saveRDS(libraryList,"savedAnalysis/libraryList.rds")
+    rcmd <- gsub("tool","local", rcmd)
+    write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
+   if(!file.exists("savedAnalysis/performGSEA.R")){
+     dump("performGSEA", file = "savedAnalysis/performGSEA.R",append=T)
+   }
        
     }else{
        libraryRDS <- readRDS("libraryRDS.rds")
@@ -256,6 +257,7 @@ if(mode == "tool"){
    saveRDS(meta.info, "savedAnalysis/meta_info.rds")
    saveRDS(feature_info, "savedAnalysis/feature_info.rds")
    saveRDS(nonendo, "savedAnalysis/nonendo.rds")
+   
    if( exists("rcmd") ){
      rcmd <- gsub("tool","local",rcmd)
      write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
@@ -471,7 +473,7 @@ PatchseqSpearman <- function(
   feature_info <- feature_info[genes.keep, ]
   rownames(feature_table) <- feature_info$gene_id
 
-   # get metadata
+  # get metadata
   mydb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   metadata <- dbReadTable(mydb, "ephys_cell")
   dbDisconnect(mydb)
@@ -500,7 +502,7 @@ PatchseqSpearman <- function(
     return("RES-NO")
    }
   
-# make dir: savedAnalysis
+  # make dir: savedAnalysis
   if(!file.exists("savedAnalysis")){
     dir.create("savedAnalysis")
     cat("## R history", file = "savedAnalysis/Rhistory.R", sep = "\n")
@@ -508,11 +510,13 @@ PatchseqSpearman <- function(
    nm = paste(analysisVar, pvalThresh, donors, cell, glucose,fdr,sep="_")
    saveRDS(feature_table, paste0("savedAnalysis/features_",nm,".rds"))
    saveRDS(metadata, paste0("savedAnalysis/meta_",nm,".rds"))
-   rcmd <- gsub("tool","local",rcmd)
-   write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
-   if(!file.exists("savedAnalysis/PatchseqSpearman.R")){
-    dump( "PatchseqSpearman", file = "savedAnalysis/PatchseqSpearman.R",append=T)
- 
+   if( exists("rcmd") ){
+     rcmd <- gsub("tool","local",rcmd)
+     write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
+     if(!file.exists("savedAnalysis/PatchseqSpearman.R")){
+       dump( "PatchseqSpearman", file = "savedAnalysis/PatchseqSpearman.R",append=T)
+       
+     }
    }
  
 } else { # mode = "local"

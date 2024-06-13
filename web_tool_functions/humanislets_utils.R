@@ -57,6 +57,7 @@ getDonors_fun <- function(){
                    filt.outcomes <- filt[filt %in% c('ephys_donor', 'gsis', 'genes', 'seahorse', 'peri_gluc', 'peri_leu', 'peri_olp', 'ephys_cell')]
                    con <- dbConnect(RSQLite::SQLite(), outcomes.path)
                    filt.list <- c()
+                   if(length(filt.outcomes) > 0){
                    for (j in c(1:length(filt.outcomes))) {
                      if (length(donors) > 1){
                        table <- dbReadTable(con, name = filt.outcomes[j])
@@ -94,6 +95,7 @@ getDonors_fun <- function(){
                        break;
                      }
                    }
+                     }
                    dbDisconnect(con);
 
                    # Omics tables

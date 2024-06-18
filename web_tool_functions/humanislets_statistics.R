@@ -9,6 +9,8 @@ performGSEA <- function(funcLib = "kegg", rank.stat = "coef", fdr = 0.05, collap
   library(fgsea)
   library(data.table)
   
+  set.seed(42)
+  
   fdr <- as.numeric(fdr)
   
   if(mode=="tool"){
@@ -46,7 +48,8 @@ performGSEA <- function(funcLib = "kegg", rank.stat = "coef", fdr = 0.05, collap
   res <- fgsea(pathways = libraryList,
                stats = ranks,
                minSize = 15,
-               maxSize = 500)
+               maxSize = 500,
+               )
   
   # find independent pathways if collapse set to true
   if(collapse == "true"){

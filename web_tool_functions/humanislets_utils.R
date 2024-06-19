@@ -885,7 +885,9 @@ createEphysSet <- function(cell, glucose, info, all.info){
 getSearchResults <- function(variable_ID, variable_type, contrast){
 
   library(RSQLite)
-
+ if(variable_ID=="donorgender"){
+    variable_ID = "donorsex"
+}
 
   # set sqlite file path
   sqlite.path <- paste0(sqlite.path, "HI_precomputed.sqlite");

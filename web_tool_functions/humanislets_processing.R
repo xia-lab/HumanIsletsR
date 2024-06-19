@@ -117,7 +117,7 @@ redcap_export_fun <- function(api_token){
   ### donor
   
   # have to get donor info from Pat/Joss/Aliya now
-  donor <- read.csv(paste0(other.tables.path, "outcomes_processing_input/donor_info.csv"))
+  donor <- tables$donor #read.csv(paste0(other.tables.path, "outcomes_processing_input/donor_info.csv"))
 
   # rework medical diagnosis
   colnames(donor)[colnames(donor) == "medicalconditions___1"] <- "T1_diabetes"

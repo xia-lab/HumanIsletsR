@@ -181,7 +181,9 @@ metaplot_fun = function(meta, x.label, imgNm) {
   
   donor.meta <- c("donorage", "donorsex", "donationtype", "bodymassindex", "hba1c", "hla_a2", 
                   "diagnosis", "other_condition", "percentieqrecoverypostculture", "pdisletparticleindex",
-                  "pdinsulinperieq", "pdinsulindnaratio", "predistributionculturetime")
+                  "pdinsulinperieq", "pdinsulindnaratio", "predistributionculturetime",
+                  "t1d_grs","t1d_drdq","t1d_class1","t1d_class2","t1d_nonhla",
+                  "t2d_grs","t2d_beta_cell","t2d_proins","t2d_obesity","t2d_lipodys", "t2d_liver_lipid")
   
   if (meta %in% donor.meta) {
     table.name <- "donor"

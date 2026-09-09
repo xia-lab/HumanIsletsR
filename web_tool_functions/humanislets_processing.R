@@ -1,5 +1,5 @@
 # R Functions for HumanIslets web tool
-# Author: Jessica Ewald
+# Author: Jessica Ewald, Y.L
 
 ################################################################################
 
@@ -14,12 +14,15 @@ redcap_export_fun <- function(api_token){
   
   api_url <- "https://redcap.ualberta.ca/api/";
   cur.dir <- getwd()
+  api_token = "B36712310E2A52F96F26DA5EBF3DBB62"
+  
+  ADIIsletCoreHumanIsl_DATA <- read.csv("~/Documents/humanislets/ADIIsletCoreHumanIsl_DATA_2026-03-05_1957.csv")
   
   report.ids <- c(32427, 32428, 32429, 32431, 32438, 37603, 40523)
   report.names <- c("donor", "distribution", "exocytosis", "isolation", "gsis", "ephys", "inventory")
   
   # download whole files
-  redcap_download_file_oneshot(directory = cur.dir,
+  redcap_file_download_oneshot(directory = cur.dir,
                                redcap_uri = api_url,
                                token = api_token,
                                record = "R000",
@@ -27,7 +30,7 @@ redcap_export_fun <- function(api_token){
                                overwrite = TRUE,
                                file_name = "seahorse.csv")
   
-  redcap_download_file_oneshot(directory = cur.dir,
+  redcap_file_download_oneshot(directory = cur.dir,
                                redcap_uri = api_url,
                                token = api_token,
                                record = "R000",
@@ -35,7 +38,7 @@ redcap_export_fun <- function(api_token){
                                overwrite = TRUE,
                                file_name = "perifusion.pzfx")
   
-  redcap_download_file_oneshot(directory = cur.dir,
+  redcap_file_download_oneshot(directory = cur.dir,
                                redcap_uri = api_url,
                                token = api_token,
                                record = "R000",
@@ -45,25 +48,33 @@ redcap_export_fun <- function(api_token){
   
   # get tables from report
   tables <- list()
-  for(i in c(1:length(report.ids))){
+  for (i in seq_along(report.ids)) {
     
     dat <- redcap_report(redcap_uri = api_url,
-                         token = api_token, 
-                         report_id = report.ids[i],
+                         token      = api_token, 
+                         report_id  = report.ids[i],
                          guess_type = FALSE)
-    dat <- dat$data
-    dat <- dat[-1, ] # remove donor R000
     
-    # handle missing values
-    dat[is.na(dat)] <- NA
-    dat[dat == ""] <- NA
-    dat[dat == "no data"] <- NA
-    dat[dat == "INF"] <- NA
-    dat[dat == "Inf"] <- NA
+    # force-close any sink the function may have left open
+    while (sink.number() > 0) sink()
+    
+    dat <- dat$data
+    dat <- dat[-1, ]
+    
+    dat[is.na(dat)]                    <- NA
+    dat[dat == ""]                     <- NA
+    dat[dat == "no data"]              <- NA
+    dat[dat == "INF"]                  <- NA
+    dat[dat == "Inf"]                  <- NA
     dat[dat == "no image available.jpg"] <- NA
+    
     tables[[i]] <- dat
+    print(i)
   }
+  
   names(tables) <- report.names
+  
+  tables <- lapply(tables,  as.data.frame)
   
   
   #### TABLE-SPECIFIC FORMATTING ####
@@ -112,20 +123,21 @@ redcap_export_fun <- function(api_token){
   # remove unneeded distribution table
   tables <- tables[names(tables) != "inventory"]
   
+  iso <- iso[grepl("^R",iso$record_id),]
+  
   tables[[which(names(tables) == "isolation")]] <- iso
   
   ### donor
   
   # have to get donor info from Pat/Joss/Aliya now
-  donor <- tables$donor #read.csv(paste0(other.tables.path, "outcomes_processing_input/donor_info.csv"))
-
+  donor <- tables$donor
   # rework medical diagnosis
   colnames(donor)[colnames(donor) == "medicalconditions___1"] <- "T1_diabetes"
   colnames(donor)[colnames(donor) == "medicalconditions___2"] <- "T2_diabetes"
 
   inds.cond <- grep("medicalconditions", colnames(donor))
   donor <- donor[,-inds.cond]
-
+  donor <- donor[grepl("^R",donor$record_id),]
   # column for HLA typing
   donor$hla_a2 <- rep(0, dim(donor)[1])
   donor$hla_a2[is.na(donor$hlaa)] <- NA
@@ -151,7 +163,10 @@ redcap_export_fun <- function(api_token){
   donor$diagnosis_computed <- donor$diagnosis
   donor$diagnosis_computed[donor$diagnosis == "None" & as.numeric(donor$hba1c) > 6.5] <- "Type2"
   donor$diagnosis_computed[donor$diagnosis == "None" & as.numeric(donor$hba1c) < 6.5 & as.numeric(donor$hba1c) > 5.7] <- "Pre.T2D"
-
+ 
+  donor$yearsdiabetic <- ADIIsletCoreHumanIsl_DATA$yearsdiabetic[match(donor$record_id,ADIIsletCoreHumanIsl_DATA$record_id)]
+  donor$yearsdiabetic[  donor$yearsdiabetic=="unknown"] =NA
+ 
   # merge with distribution
   donor <- merge(donor, tables[["distribution"]], by = "record_id")
 
@@ -174,7 +189,7 @@ redcap_export_fun <- function(api_token){
   char.cols <- c("record_id", "rrid", "donorsex", "donationtype", "hlaa", "hlab",
                  "hlabw", "hlac", "hlacw", "hladrb1", "hladr", "hladqb1", "hladqa1",
                  "hladpb1", "dpa1", "hlaother", "hla_a2", "T1_diabetes", "T2_diabetes",
-                 "diagnosis", "diagnosis_computed")
+                 "diagnosis", "diagnosis_computed" )
   num.cols <- colnames(donor)[!(colnames(donor) %in% char.cols)]
 
   donor[,char.cols] <- apply(donor[,char.cols], 2, as.character)
@@ -186,7 +201,7 @@ redcap_export_fun <- function(api_token){
   ### exocytosis
   exo <- tables$exocytosis
   exo <- exo[,grep("exocytosis", colnames(exo), invert = TRUE)]
-  exo <- data.table::melt(exo, id.vars = "record_id", measure.vars = colnames(exo)[-1])
+  exo <- reshape2::melt(exo, id.vars = "record_id", measure.vars = colnames(exo)[-1])
   exo <- na.omit(exo)
   colnames(exo) <- c("record_id", "exposure", "insulin_exo")
   exo$cell_id <- NA
@@ -211,9 +226,9 @@ redcap_export_fun <- function(api_token){
   tables[[which(names(tables) == "exocytosis")]] <- exo
   
   ### reformat gsis
-  gsis <- tables[["gsis"]]
-  gsis <- as.data.table(gsis)
+  gsis <- tables[["gsis"]] 
   gsis.ct <- gsis[,c("record_id", "culturetime2")]
+  gsis <- setDT(gsis)
   gsis <- data.table::melt(gsis, id.vars = 'record_id', 
                            measure.vars = list(
                              c("lowmedcontent12", "lowmedcontent22", "lowmedcontent32"), 
@@ -282,14 +297,14 @@ redcap_export_fun <- function(api_token){
   
   # get into better format
   ephys <- ephys[ephys$epnumber > 0, ]
-  ephys <- data.table::melt(ephys, id.vars = "record_id", measure.vars = colnames(ephys)[-1])
+  ephys <- reshape2::melt(ephys, id.vars = "record_id", measure.vars = colnames(ephys)[-1])
   ephys <- na.omit(ephys)
   ephys$variable <- as.character(ephys$variable)
   ephys <- ephys[ephys$variable != "epnumber", ]
   ephys <- ephys[ephys$variable != "electrophysiology_complete", ]
   ephys$cell_id <- gsub("[^0-9.-]", "", ephys$variable)
   ephys$variable <- gsub("[0-9.+]", "", ephys$variable)
-  ephys <- dcast(ephys, record_id+cell_id ~ variable, value.var = "value")
+  ephys <- reshape2::dcast(ephys, record_id+cell_id ~ variable, value.var = "value")
   
   # filter out unneeded cell types
   ephys <- ephys[ephys$eptype %in% c("1", "2"), ]
@@ -300,9 +315,9 @@ redcap_export_fun <- function(api_token){
   ephys <- ephys[,!c(colnames(ephys) %in% c("epnscc", "eprpbr", "epvspc", "epname"))]
   
   # re-order columns
-  ephys <- ephys[,c("record_id", "cell_id", "eptype", "epdays", "epsize", "epntc", "epnfdc", "epnldc", "nci", "epnpsca", "ephisc", "epnepcca", "epnlcca")]
-  ephys[,4:13] <- apply(ephys[,4:13], 2, as.numeric)
-  colnames(ephys) <- c("record_id", "cell_id", "eptype", "epdays", "cell_size_pF", "total_exocytosis_fF_pF", "early_exocytosis_fF_pF", "late_exocytosis_fF_pF", "calcium_entry_pC_pF", "na_current_amp_pA_pF", "na_half_inactivation_mV", "early_ca_current_pA_pF", "late_ca_current_pA_pF")
+  ephys <- ephys[,c("record_id", "cell_id", "eptype",  "epsize", "epntc", "epnfdc", "epnldc", "nci", "epnpsca", "ephisc", "epnepcca", "epnlcca")]
+  ephys[,4:12] <- apply(ephys[,4:12], 2, as.numeric)
+  colnames(ephys) <- c("record_id", "cell_id", "eptype",  "cell_size_pF", "total_exocytosis_fF_pF", "early_exocytosis_fF_pF", "late_exocytosis_fF_pF", "calcium_entry_pC_pF", "na_current_amp_pA_pF", "na_half_inactivation_mV", "early_ca_current_pA_pF", "late_ca_current_pA_pF")
   
   # set exocytosis values below zero to zero
   ephys$total_exocytosis_fF_pF[ephys$total_exocytosis_fF_pF < 0] <- 0
@@ -403,13 +418,46 @@ redcap_export_fun <- function(api_token){
   olp <- olp[order(olp$record_id), ]
   tables[["peri_olp"]] <- olp
   
+  #### add   Prohormone Expression, download from redcap
+  prohormone <- read.csv("ADIIsletCoreHumanIsl-ProhormoneExpression_DATA_2026-03-06_2048.csv")
+  prohormone$redcap_data_access_group <- NULL
+  prohormone$prohormone_expression_complete <-NULL
+  prohormone[prohormone==""] <- NA
+  prohormone[prohormone=="N/a"] <- NA
+   
+  all_na_rows <- which(apply(prohormone[, -1], 1, function(x) all(is.na(x))))
+  prohormone <- prohormone[-all_na_rows,]
+  prohormone[,-1] <- apply(prohormone[,-1],2,as.numeric)
+  prohormone_filt <-   prohormone[,c(1,grep("avg|ratio",  colnames(prohormone)))]
+  
+  tables[["prohormone"]]<-prohormone
+  
+  ###### add grs and ancestry from Ana's group 
+  grs <- read.csv(paste0(other.tables.path,"display_data/numerical_grs.csv"))
+  all_na_rows <- which(apply(grs[, -1], 1, function(x) all(is.na(x))))
+  grs <- grs[-all_na_rows,]
+  grs[,-1] <- apply(grs[,-1],2,as.numeric)
+  tables[["grs"]]<-grs
+  
+  ancestry <- read.csv(paste0(other.tables.path,"display_data/numerical_ancestry.csv"))
+  all_na_rows <- which(apply(ancestry[, -1], 1, function(x) all(is.na(x))))
+  ancestry <- ancestry[-all_na_rows,]
+  ancestry[,-1] <- apply(ancestry[,-1],2,as.numeric)
+  tables[["ancestry"]]<-ancestry
+  
+  ###### add lipid Extraction  from Erin's group 
+  lip_extract <- read.csv(paste0(other.tables.path,"display_data/lip_extract.csv"))
+ 
+  lip_extract[,-1] <- apply(lip_extract[,-1],2,as.numeric)
+  tables[["lip_extract"]]<-lip_extract
+  
   ### Add additional summary tables
   raw_variable_summary <- read.csv(paste0(other.tables.path, "outcomes_processing_input/raw_variable_summary.csv"));
   function_summary <- read.csv(paste0(other.tables.path, "outcomes_processing_input/function_summary.csv"));
   disc_groups <- read.csv(paste0(other.tables.path, "display_interface/disc_groups.csv"));
-  proc_variable_summary <- read.csv(paste0(other.tables.path, "display_interface/proc_variable_summary.csv"));
+  proc_variable_summary <- read.csv(paste0(other.tables.path, "display_interface/proc_variable_summary_v2.csv"));
   
-  patchseq <- readRDS(paste0(other.tables.path, "outcomes_processing_input/patchseq_metadata.rds"));
+  patchseq <- readRDS(paste0(other.tables.path, "outcomes_processing_input/patchseq_metadata_v2.rds"));
   
   ### combine ephys data
   ephys.rc <- tables[["ephys"]]
@@ -417,7 +465,7 @@ redcap_export_fun <- function(api_token){
   ephys.exo <- tables[["exocytosis"]]
   
   # make columns uniform
-  ephys.rc <- ephys.rc[,-c(4)] # remove cell ID and days in culture
+ # ephys.rc <- ephys.rc[,-c(4)] # remove cell ID and days in culture
   ephys.rc$cell_id <- paste0(ephys.rc$record_id, "_", ephys.rc$cell_id, "_rc")
   ephys.rc$glucose_mM <- "5"
   colnames(ephys.rc)[3] <- "cell_type"
@@ -473,6 +521,8 @@ redcap_export_fun <- function(api_token){
     } else if(uniq.tables[i] == "seahorse"){
       dat <- aggregate(dat[which(colnames(dat) != "record_id")], dat[which(colnames(dat) == "record_id")], mean)
       varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
+      
+      
     } else if(uniq.tables[i] == "gsis"){
       first.secr <- dat[,c("record_id", "first_gluc_conc", "first_insulin_secretion")]
       second.secr <- dat[,c("record_id", "second_gluc_conc", "second_insulin_secretion")]
@@ -483,11 +533,11 @@ redcap_export_fun <- function(api_token){
       ins.secr$gluc_conc <- paste0("insulin_secretion_", gsub("\\.", "p", ins.secr$gluc_conc))
       
       med.secr <- aggregate(ins.secr[c("insulin_secretion")], ins.secr[c("record_id", "gluc_conc")], median, na.rm = TRUE)
-      med.secr <- dcast(med.secr, record_id ~ gluc_conc, value.var = "insulin_secretion")
+      med.secr <- reshape2::dcast(med.secr, record_id ~ gluc_conc, value.var = "insulin_secretion")
       
       med.stim <- aggregate(dat[c("stim_index")], dat[c("record_id", "gluc_conc_group")], median, na.rm = TRUE)
       med.stim$gluc_conc_group <- paste0("gsis_index_", gsub("\\.", "p", med.stim$gluc_conc_group))
-      med.stim <- dcast(med.stim, record_id ~ gluc_conc_group, value.var = "stim_index")
+      med.stim <- reshape2::dcast(med.stim, record_id ~ gluc_conc_group, value.var = "stim_index")
       
       med.ins <- aggregate(dat[c("total_insulin_content")], dat[c("record_id")], median, na.rm = TRUE)
       
@@ -517,6 +567,14 @@ redcap_export_fun <- function(api_token){
       varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
     } else if (uniq.tables[i] == "computed"){
       varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
+    }else if (uniq.tables[i] == "grs"){
+      varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
+    }else if (uniq.tables[i] == "ancestry"){
+      varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
+    }else if (uniq.tables[i] == "lip_extract"){
+      varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
+    }else if (uniq.tables[i] == "prohormone"){
+      varValues <- merge(varValues, dat, by = "record_id", all = TRUE)
     }
   }
   
@@ -526,9 +584,10 @@ redcap_export_fun <- function(api_token){
                   "auc_gluc_6mmgluc", "peak_leu_5mmleu", "auc_leu_5mmleu", "auc_leu_5mmleu_6mmgluc", "peak_olp_1p5mmolp",
                   "gsis_index_1_10", "gsis_index_1_16p7", "gsis_index_2p8_16p7", "total_insulin_content",
                   "insulin_secretion_1", "insulin_secretion_10", "insulin_secretion_16p7", "insulin_secretion_2p8",
-                  "dnacontent", "insulinperieq", "pdinsulincontent")
+                  "dnacontent", "insulinperieq", "pdinsulincontent","avglgcp","avglgpi","avghgcp","avghgpi","avglysatecp","avglysatepi",
+                 "tg_weight_recovery" )
   
-  for(i in c(1:length(right.skew))){
+  for(i in c(26:length(right.skew))){
     varValues[,right.skew[i]] <- log10(varValues[,right.skew[i]])
   }
   
@@ -544,7 +603,7 @@ redcap_export_fun <- function(api_token){
   tables[["proc_metadata"]] <- varValues;
   
   ### Write out data we need for donor view page
-  donor.info <- varValues[,c("record_id", "donorage", "bodymassindex", "hba1c")]
+  donor.info <- varValues[,c("record_id", "donorage", "bodymassindex", "hba1c","yearsdiabetic")]
   donor.info$hba1c <- 10^donor.info$hba1c
   write.csv(donor.info, paste0(other.tables.path, "display_data/numerical_donor_info.csv"), row.names = FALSE)
   
@@ -721,9 +780,10 @@ redcap_export_fun <- function(api_token){
   
   #### Write out to sqlite ####
   sqlite.tables <- c("computed", "donor", "ephys_cell", "ephys_donor", "gsis", 
-                     "isolation", "proc_metadata", "proc_variable_summary", "seahorse",
-                     "seahorse_norm_dna", "seahorse_norm_dna_baselineoc",
-                     "function_summary",'peri_gluc', 'peri_leu', 'peri_olp')
+                     "isolation", "proc_metadata", "proc_variable_summary","raw_variable_summary",
+                   #  "seahorse",   "seahorse_norm_dna", "seahorse_norm_dna_baselineoc",
+                     "function_summary",'peri_gluc', 'peri_leu', 'peri_olp',
+                     'grs','ancestry','prohormone','lip_extract')
   con <- dbConnect(RSQLite::SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   for(i in c(1:length(sqlite.tables))){
     dat <- tables[[sqlite.tables[i]]]
@@ -731,6 +791,9 @@ redcap_export_fun <- function(api_token){
     
     dbWriteTable(con, table.name, dat, overwrite = TRUE)
   }
+  
+  dbWriteTable(con, "raw_variable_summary", raw_variable_summary, overwrite = TRUE)
+  
   dbDisconnect(con)
   
 }

@@ -14,7 +14,7 @@ redcap_export_fun <- function(api_token){
   
   api_url <- "https://redcap.ualberta.ca/api/";
   cur.dir <- getwd()
-  api_token = "B36712310E2A52F96F26DA5EBF3DBB62"
+  api_token = ""
   
   ADIIsletCoreHumanIsl_DATA <- read.csv("~/Documents/humanislets/ADIIsletCoreHumanIsl_DATA_2026-03-05_1957.csv")
   

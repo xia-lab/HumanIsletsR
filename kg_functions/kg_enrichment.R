@@ -252,12 +252,24 @@
   if(!identical(kp$entity, lp$entity)) return("RES-NO-LIBRARY")
 
   # normalise the contrast the same way the stored results do
-  if(nzchar(contrast) && !identical(contrast, "anova")){
+  # !! THE OMNIBUS IS DETECTED CASE-INSENSITIVELY, because the store spells it 'ANOVA'.
+  # MEASURED 2026-09-09 on HI_precomputed_v2.omics_outcomes, Metadata_ID_col='diagnosis_computed',
+  # Omics_ID='proc_rnaseq':  Contrast='ANOVA' -> 16,716 rows ;  Contrast='anova' -> 0 rows.
+  # So the literal comparisons below could never both hold: passing 'anova' selected ORA correctly
+  # and then found NOTHING (RES-NO-DIFFERENTIAL), while passing the stored 'ANOVA' found the rows
+  # and left analysisType at 'gsea' -- running a RANKED test on an omnibus, which is exactly what
+  # the next comment forbids. Verified live: F7 "what changes with Multi-omics cluster" reached
+  # final_cluster/ANOVA and ran as GSEA.
+  # !! THE LOOKUP STILL USES THE CALLER'S OWN SPELLING. `.kgEnrichFromPrecompute` matches
+  # COALESCE(Contrast,'') EXACTLY, and the caller copies the contrast verbatim off the retrieved
+  # differential's own rows, so nothing here re-spells a stored value.
+  anova.q <- identical(tolower(trimws(contrast)), "anova")
+  if(nzchar(contrast) && !anova.q){
     pp <- trimws(strsplit(contrast, "-", fixed = TRUE)[[1]])
     if(length(pp) != 2 && nzchar(ref)) contrast <- paste0(contrast, "-", ref)
   }
   # an omnibus has no signed effect -- nothing to rank, so ORA is the only valid test
-  if(identical(contrast, "anova")) analysisType <- "ora"
+  if(anova.q) analysisType <- "ora"
 
   # the covariate SET this question implies (matching key only -- nothing is fitted here)
   cov.expected <- if(covariates %in% c("none", "NA", "")) character(0)

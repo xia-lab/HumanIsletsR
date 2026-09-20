@@ -68,6 +68,21 @@
 #               the significant set. It never filters the GSEA input (§K: GSEA needs no
 #               significance cutoff, and the whole ranked universe is what it consumes).
 #
+# features      OPTIONAL. A LIST of features, "|"-separated (user ruling 2026-09-19: "add the feature
+#               list input to kgEnrichment"). When given, THE LIST IS THE QUERY SET and the test is
+#               ORA: a list carries no single rank, so §K's method-by-INPUT makes it over-representation
+#               (the same rule as the omnibus). Each name is matched, case-insensitively, to the layer's
+#               own FeatureId or symbol. The UNIVERSE is every feature TESTED for the phenotype(s):
+#                 phenotype "a|b"      -> tested for EVERY one of them (a set shared by several
+#                                         phenotypes is tested against what all of them measured -- the
+#                                         F10 rule for an intersection)
+#                 phenotype "a1,a2"    -> the members of ONE phenotype (a concept's children): tested
+#                                         for ANY member
+#                 phenotype "a:local_a"-> alternative SPELLINGS of one key: the first that holds a
+#                                         differential is used
+#               `contrast` is one value for all, or "|"-aligned with the phenotypes.
+#               Absent/empty -> the function is exactly the single-phenotype call it always was.
+#
 # input         auto (DEFAULT) | userfolder | precompute
 #
 #               auto        USER FOLDER FIRST, then the precompute. Rationale: a user who
@@ -102,8 +117,11 @@
 #          also carry the t-statistic, so the alternative remains available without a refit.
 #
 # Result:  kg_enrichment.csv + a timestamped copy. Returns "RES-OK;<n_sig>".
+#          With `features`, four columns say what was tested: Features_given, Features_matched (of
+#          those, found in the universe), Query_n and Universe_n (library identifiers).
 # Refusals: RES-NO-OMICS | RES-NO-LIBRARY | RES-NO-DIFFERENTIAL | RES-NO-UNIVERSE
 #         | RES-NO-KEY | RES-NO-ENRICH
+#         | RES-NO-FEATURES (with `features`: none of the listed features is in the universe)
 # ==============================================================================
 
 .kgEnrichDefaultCovs <- c("donorage", "donorsex", "bodymassindex",
@@ -236,10 +254,108 @@
   d
 }
 
+# ---- the differential for ONE phenotype key, from the source `input` names ---------------------
+# Returns list(de, src), a refusal string (RES-NO-UNIVERSE), or NULL when neither source holds it.
+# ⚠ ONE RULE FOR BOTH PATHS: the single-phenotype call and the feature-list call read a phenotype's
+# differential through this function -- the body is the one `.kgEnrichmentImpl` always ran, moved here.
+.kgEnrichDE <- function(phenotype, contrast, omics_layer, lp, covariates, input){
+  # the covariate SET this question implies (matching key only -- nothing is fitted here)
+  cov.expected <- if(covariates %in% c("none", "NA", "")) character(0)
+                  else if(identical(covariates, "default")) .kgEnrichDefaultCovs[.kgEnrichDefaultCovs != phenotype]
+                  else { cv <- trimws(strsplit(covariates, "[,;]")[[1]]); cv[nzchar(cv) & cv != phenotype] }
+
+  # ---- get the differential; NEVER compute one ----
+  de <- NULL; src <- NA_character_
+  if(input %in% c("auto", "userfolder")){
+    uf <- .kgEnrichFromUserFolder(phenotype, omics_layer, contrast, cov.expected)
+    if(is.character(uf)) return(uf)                 # RES-NO-UNIVERSE
+    if(!is.null(uf)){ de <- uf; src <- "userfolder" }
+  }
+  if(is.null(de) && input %in% c("auto", "precompute")){
+    # ⚠ THE PRECOMPUTE IS ONLY VALID FOR THE DEFAULT COVARIATE SET.
+    # It is fitted with the standard covariates (minus the tested variable). Serving it for a
+    # question that asked for a CUSTOM set -- or for none -- would answer with numbers adjusted
+    # differently from what was requested, and nothing downstream could tell: the enrichment
+    # would look complete and be wrong. So a custom set falls through to RES-NO-DIFFERENTIAL and
+    # the CALLER runs kgAssoc with those covariates first. This holds even when `precompute` was
+    # forced, because a covariate mismatch is a correctness problem, not a preference.
+    cov.is.default <- .kgCovSetEq(paste(cov.expected, collapse = ","),
+                                  .kgEnrichDefaultCovs[.kgEnrichDefaultCovs != phenotype])
+    if(cov.is.default){
+      pc <- .kgEnrichFromPrecompute(phenotype, lp$omics_id, contrast)
+      if(!is.null(pc)){ de <- pc; src <- "precompute" }
+    }
+  }
+  if(is.null(de) || nrow(de) == 0) return(NULL)
+  list(de = de, src = src)
+}
+
+# ---- ORA of a GIVEN feature list (user ruling 2026-09-19) -------------------------------------------
+# See `features` in the header. The universe is formed from the phenotypes' own differentials (never
+# a whole library), so a list is tested only against features that were actually measured and tested.
+.kgEnrichFeatureList <- function(feats, phenotype, contrast, omics_layer, lp, kp, library,
+                                 covariates, input, fdr.n){
+  groups <- trimws(strsplit(as.character(phenotype), "|", fixed = TRUE)[[1]])
+  groups <- groups[nzchar(groups)]
+  if(!length(groups)) return("RES-NO-DIFFERENTIAL")
+  cts <- if(grepl("|", contrast, fixed = TRUE)) trimws(strsplit(contrast, "|", fixed = TRUE)[[1]]) else NULL
+  uni <- NULL; srcs <- character(0); used <- character(0)
+  for(i in seq_along(groups)){
+    ct.i <- if(!is.null(cts) && length(cts) == length(groups)) cts[i] else contrast
+    members <- trimws(strsplit(groups[i], ",", fixed = TRUE)[[1]]); members <- members[nzchar(members)]
+    ids.i <- character(0); src.i <- character(0); key.i <- character(0)
+    for(m in members){
+      for(alt in trimws(strsplit(m, ":", fixed = TRUE)[[1]])){
+        if(!nzchar(alt)) next
+        got <- .kgEnrichDE(alt, ct.i, omics_layer, lp, covariates, input)
+        if(is.character(got)) return(got)
+        if(!is.null(got)){
+          ids.i <- union(ids.i, as.character(got$de$FeatureId))
+          src.i <- c(src.i, got$src); key.i <- c(key.i, alt)
+          break                                   # the first spelling that holds a differential
+        }
+      }
+    }
+    # a named phenotype with no differential: the shared universe cannot be formed
+    if(!length(ids.i)) return("RES-NO-DIFFERENTIAL")
+    uni  <- if(is.null(uni)) ids.i else intersect(uni, ids.i)
+    srcs <- c(srcs, paste(unique(src.i), collapse = ","))
+    used <- c(used, paste(key.i, collapse = ","))
+  }
+
+  con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite"))
+  ann <- .kgEnrichAnnot(con, lp$tbl, lp$id, kp$col)
+  dbDisconnect(con)
+  if(is.null(ann)) return("RES-NO-KEY")
+  ua <- ann[ann$FeatureId %in% uni & !is.na(ann$Key) & ann$Key != "" & ann$Key != "NA", , drop = FALSE]
+  if(nrow(ua) == 0) return("RES-NO-KEY")
+  fk <- unique(tolower(feats))
+  hit <- tolower(ua$FeatureId) %in% fk | tolower(ua$Symbol) %in% fk | tolower(ua$Key) %in% fk
+  qa <- ua[hit, , drop = FALSE]
+  if(nrow(qa) == 0) return("RES-NO-FEATURES")
+
+  er <- .kgOra(qa$Key, ua$Key, library, fdr.n)
+  if(is.null(er) || nrow(er) == 0) return("RES-NO-ENRICH")
+  er$Library <- library
+  er$Source  <- paste(srcs, collapse = "|")
+  er$Features_given   <- length(fk)
+  er$Features_matched <- sum(fk %in% unique(c(tolower(ua$FeatureId), tolower(ua$Symbol), tolower(ua$Key))))
+  er$Query_n    <- length(unique(qa$Key))
+  er$Universe_n <- length(unique(ua$Key))
+  er <- er[order(er$Adjusted_p_value), , drop = FALSE]
+  n.sig <- sum(er$Adjusted_p_value < fdr.n, na.rm = TRUE)
+
+  ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
+  utils::write.csv(er, paste0("kg_enrichment_", safe(paste(used, collapse = "_")), "_list_",
+                              safe(library), "_", ts, ".csv"), row.names = FALSE)
+  utils::write.csv(er, "kg_enrichment.csv", row.names = FALSE)
+  paste0("RES-OK;", n.sig)
+}
+
 .kgEnrichmentImpl <- function(phenotype, contrast = "", ref = "",
                          omics_layer = "rnaseq", library = "kegg",
                          analysisType = "gsea", covariates = "default",
-                         fdr = "0.05", input = "auto", mode = "tool"){
+                         fdr = "0.05", input = "auto", mode = "tool", features = ""){
   library(RSQLite); library(DBI)
   .kgSetPaths()
   fdr.n <- suppressWarnings(as.numeric(fdr)); if(is.na(fdr.n)) fdr.n <- 0.05
@@ -271,34 +387,19 @@
   # an omnibus has no signed effect -- nothing to rank, so ORA is the only valid test
   if(anova.q) analysisType <- "ora"
 
-  # the covariate SET this question implies (matching key only -- nothing is fitted here)
-  cov.expected <- if(covariates %in% c("none", "NA", "")) character(0)
-                  else if(identical(covariates, "default")) .kgEnrichDefaultCovs[.kgEnrichDefaultCovs != phenotype]
-                  else { cv <- trimws(strsplit(covariates, "[,;]")[[1]]); cv[nzchar(cv) & cv != phenotype] }
+  # ---- a GIVEN feature list: ORA against the phenotypes' tested universe (see `features`) ----
+  feats <- if(is.null(features) || is.na(features)) character(0)
+           else trimws(strsplit(as.character(features), "|", fixed = TRUE)[[1]])
+  feats <- feats[nzchar(feats)]
+  if(length(feats))
+    return(.kgEnrichFeatureList(feats, phenotype, contrast, omics_layer, lp, kp, library,
+                                covariates, input, fdr.n))
 
-  # ---- get the differential; NEVER compute one ----
-  de <- NULL; src <- NA_character_
-  if(input %in% c("auto", "userfolder")){
-    uf <- .kgEnrichFromUserFolder(phenotype, omics_layer, contrast, cov.expected)
-    if(is.character(uf)) return(uf)                 # RES-NO-UNIVERSE
-    if(!is.null(uf)){ de <- uf; src <- "userfolder" }
-  }
-  if(is.null(de) && input %in% c("auto", "precompute")){
-    # ⚠ THE PRECOMPUTE IS ONLY VALID FOR THE DEFAULT COVARIATE SET.
-    # It is fitted with the standard covariates (minus the tested variable). Serving it for a
-    # question that asked for a CUSTOM set -- or for none -- would answer with numbers adjusted
-    # differently from what was requested, and nothing downstream could tell: the enrichment
-    # would look complete and be wrong. So a custom set falls through to RES-NO-DIFFERENTIAL and
-    # the CALLER runs kgAssoc with those covariates first. This holds even when `precompute` was
-    # forced, because a covariate mismatch is a correctness problem, not a preference.
-    cov.is.default <- .kgCovSetEq(paste(cov.expected, collapse = ","),
-                                  .kgEnrichDefaultCovs[.kgEnrichDefaultCovs != phenotype])
-    if(cov.is.default){
-      pc <- .kgEnrichFromPrecompute(phenotype, lp$omics_id, contrast)
-      if(!is.null(pc)){ de <- pc; src <- "precompute" }
-    }
-  }
-  if(is.null(de) || nrow(de) == 0) return("RES-NO-DIFFERENTIAL")
+  # ---- get the differential; NEVER compute one (the rule lives in `.kgEnrichDE`) ----
+  got <- .kgEnrichDE(phenotype, contrast, omics_layer, lp, covariates, input)
+  if(is.character(got)) return(got)                # RES-NO-UNIVERSE
+  if(is.null(got)) return("RES-NO-DIFFERENTIAL")
+  de <- got$de; src <- got$src
 
   # ---- attach the library's identifier from the layer's annotation columns ----
   con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite"))

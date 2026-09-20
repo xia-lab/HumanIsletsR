@@ -244,6 +244,8 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 
 # ==============================================================================
 # kgPhenoGroup - phenotype x GROUPING screen (frame F35)
+#   OUT: Phenotype, N, Groups, Statistic, P_value, Direction, Box, Adjusted_p_value
+#        Box = per level 'level:min,q1,median,q3,max', levels joined by '|' (F35's turn-2 box view)
 # ------------------------------------------------------------------------------
 # Which phenotypes differ across the LEVELS of a grouping variable (donor STATE
 # final_cluster / diagnosis / donorsex)? feature x state IS precomputed, but
@@ -325,9 +327,24 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
       if(inherits(st, "try-error") || is.null(st) || is.na(st)) next
       p <- as.numeric(st); dir <- "differs across groups (non-directional)"
     }
+    # -- THE BOX THE ANSWER IS DRAWN FROM, PER LEVEL (2026-09-19). F35's turn-2 view is
+    #    `box | phenotype_set "surfaced" | annotate "group medians + adj_p per phenotype"`, drawn
+    #    `from A(11)` -- this result. Only `Direction` left here, so the page had nothing to draw
+    #    and every phenotype-screen answer rendered an empty panel. The medians were ALREADY
+    #    computed above for `Direction` and then dropped.
+    # -- FIVE NUMBERS PER LEVEL = A BOX (min, q1, median, q3, max), the same summary any box plot
+    #    takes, so no donor-level payload has to travel: `C2:0.1,0.4,0.6,0.8,1.2|C0:...`, levels in
+    #    the `Groups` order, one entry per level, `NA` where a level has no finite value.
+    bx <- vapply(glev, function(g){
+      v <- yy[gg == g]; v <- v[is.finite(v)]
+      if(!length(v)) return(paste0(g, ":NA"))
+      q <- stats::quantile(v, c(0, .25, .5, .75, 1), na.rm = TRUE, names = FALSE)
+      paste0(g, ":", paste(signif(q, 4), collapse = ","))
+    }, character(1))
     rows[[length(rows)+1]] <- data.frame(
       Phenotype = pc, N = length(yy), Groups = paste(glev, collapse = "/"),
       Statistic = signif(stat, 3), P_value = signif(p, 3), Direction = dir,
+      Box = paste(bx, collapse = "|"),
       stringsAsFactors = FALSE)
   }
   if(length(rows) == 0) return("RES-NO")

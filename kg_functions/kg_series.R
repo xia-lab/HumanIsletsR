@@ -80,7 +80,9 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   db.path <- paste0(sqlite.path, "HI_omics_v2.sqlite"); if(!file.exists(db.path)) return("RES-NO-DB")
 
   feat_raw <- trimws(features)
-  if(!nzchar(feat_raw)) return("RES-NO-FEATURE")
+  # phenotype-only mode: no feature, but phenotype columns to read (see the header note)
+  pheno_only <- !nzchar(feat_raw) && nzchar(trimws(phenotypes))
+  if(!nzchar(feat_raw) && !pheno_only) return("RES-NO-FEATURE")
   # a plot is per-feature: refuse a whole-layer dump rather than emit one
   if(identical(tolower(feat_raw), "all")) return("RES-NO-FEATURE")
 
@@ -118,7 +120,32 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   phframe <- if(length(phenos)){ pf <- .kgCoerce(m, phenos); rownames(pf) <- rec; pf } else NULL
   phtypes <- if(length(phenos)) vapply(phenos, function(p) .kgPhenoType(m, p), character(1)) else character(0)
 
+  # ---- phenotype-only rows: the phenotype IS the value, so there is nothing to resolve ----
+  # Same cell rules as the feature path below (drop NA / "" / "NA", honour minN, keep the level in
+  # `pheno_value`); `value` carries the number only for a CONTINUOUS phenotype, because a level is
+  # not a measurement. `value_adjusted` stays NA: residualising is a feature-vs-covariates step and
+  # this path has no feature.
+  rows_pheno <- list()
+  if(pheno_only){
+    for(pi in seq_along(phenos)){
+      ph <- phenos[pi]
+      pv <- phframe[keep_ids, ph]; names(pv) <- keep_ids
+      ok  <- !is.na(pv) & !(as.character(pv) %in% c("", "NA"))
+      don <- keep_ids[ok]
+      if(length(don) < minN) next
+      ptype <- unname(phtypes[pi])
+      rows_pheno[[length(rows_pheno)+1]] <- data.frame(
+        donor_id = don, feature = NA_character_, symbol = NA_character_, feature_type = NA_character_,
+        layer = NA_character_,
+        value = if(identical(ptype, "cont")) as.numeric(pv[don]) else NA_real_,
+        value_adjusted = NA_real_,
+        phenotype = ph, pheno_value = as.character(pv[don]), pheno_type = ptype,
+        n_donors = length(don), subset = subset_note, stringsAsFactors = FALSE)
+    }
+  }
+
   # ---- resolve the named features (ANY entity) -- same path as kgAssoc ----
+  if(!pheno_only){
   res <- .kgLoadFeatureResolver(); if(is.null(res)) return("RES-NO-RESOLVER")
   ftoks <- .kgSplitFeatures(feat_raw, res); ftoks <- ftoks[nzchar(ftoks)]
   if(length(ftoks) == 0) return("RES-NO-FEATURE")
@@ -192,6 +219,8 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
     }
   }
 
+  }                                        # end of the feature path (pheno_only skips all of it)
+  if(pheno_only) rows <- rows_pheno
   if(length(rows) == 0) return("RES-NO")
   out <- do.call(rbind, rows)
 

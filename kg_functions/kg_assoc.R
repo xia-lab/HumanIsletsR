@@ -228,6 +228,16 @@
 
   con <- dbConnect(SQLite(), db.path); on.exit(dbDisconnect(con), add = TRUE)
   rows <- list()
+  # ⚠ ONE CLASS IS A DATA CONDITION, NOT A CRASH. A donor subset can leave a discrete phenotype with
+  # a single level ("type 1 diabetes vs pancreatitis, in lean donors only"), and limma then dies
+  # inside model.matrix with "contrasts can be applied only to factors with 2 or more levels".
+  # MEASURED 2026-09-22 on F10: 4 records came back RES-ERR — the guard caught the crash, which is
+  # right, but a crash and "the subset has only one class" are different answers and a reader cannot
+  # act on the first. Tracked here so the return can say WHICH it was.
+  one.class <- FALSE
+  # the fit sets this when ITS donor intersection leaves one level — see `.kgLimmaFit`. Reset per
+  # call, because an Rserve session is reused across requests.
+  .GlobalEnv$.kg_one_class <- FALSE
 
   parse_contrast <- function(){
     if(!nzchar(contrast) || identical(contrast, "anova")) return(list(c = "anova", r = ref))
@@ -366,9 +376,13 @@
           pc <- parse_contrast()
           # omnibus needs a real reference level; default to the first level present
           rr <- pc$r
-          if(identical(pc$c, "anova") && !nzchar(rr)){
-            lv <- levels(factor(as.character(md[[ph]]))); if(length(lv) < 2) next; rr <- lv[1]
-          }
+          # ⚠ CHECKED FOR EVERY DISCRETE FIT, NOT ONLY THE OMNIBUS. This guard used to sit inside
+          # the `anova` branch, so a NAMED contrast ("Type1-None") walked straight into limma with a
+          # one-level factor and crashed. The level count is a property of the DATA after subsetting
+          # — it has nothing to do with which contrast was asked for.
+          lv <- levels(factor(as.character(md[[ph]])))
+          if(length(lv) < 2){ one.class <- TRUE; next }
+          if(identical(pc$c, "anova") && !nzchar(rr)) rr <- lv[1]
           de <- if(identical(meth, "kendall"))
                   .kgKendallFit(Lmat, L$info, md, ph, pt, ref = rr, contrast = pc$c, minN = minN)
                 else fitfun(Lmat, L$info, md, ph, pt, ref = rr, contrast = pc$c)
@@ -397,7 +411,11 @@
     }
   }
 
-  if(length(rows) == 0) return("RES-NO")
+  # ⚠ "NOTHING TO COMPARE" IS NOT "COMPARED AND FOUND NOTHING". A bare RES-NO means the test RAN and
+  # came back empty, which IS an answer; RES-ONE-CLASS means it could not run at all. Merging them
+  # would teach a reader that a subset with one diagnosis level is a measured null.
+  if(length(rows) == 0)
+    return(if(one.class || isTRUE(.GlobalEnv$.kg_one_class)) "RES-ONE-CLASS" else "RES-NO")
   out <- do.call(rbind, rows)
 
   # ---- family FDR (default #1: BH across exactly the tests asked; never genome-wide) ----

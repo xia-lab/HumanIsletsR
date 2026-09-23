@@ -299,6 +299,23 @@
   cc <- stats::complete.cases(md); md <- md[cc, , drop = FALSE]; mat <- mat[, rownames(md), drop = FALSE]
   if(ncol(mat) < 10) return(NULL)
 
+  # ⚠ ONE LEVEL LEFT IS A DATA CONDITION, AND IT MUST BE CAUGHT **HERE**. The caller cannot see it:
+  # it checks the metadata frame, while the collapse happens above — the contrast subset keeps only
+  # the two named levels, and that is then intersected with THIS layer's donors. "type 1 diabetes vs
+  # pancreatitis, in lean donors only" leaves one level on some layers and two on others.
+  # MEASURED 2026-09-22 on F10: 4 records returned RES-ERR from model.matrix, "contrasts can be
+  # applied only to factors with 2 or more levels". A guard placed in kg_assoc.R did NOT help, for
+  # exactly this reason.
+  # ⚠ NULL IS THE ESTABLISHED "NOTHING TO FIT" RETURN (used four times above), so every caller
+  # already handles it and nothing else changes. The session flag carries WHY, so kgAssoc can answer
+  # RES-ONE-CLASS — "could not compare" — instead of a bare RES-NO, which would claim it compared
+  # and found nothing.
+  if(ptype == "disc"){
+    .lv <- unique(as.character(md[[phenotype]]))
+    .lv <- .lv[!is.na(.lv) & nzchar(.lv) & .lv != "NA"]
+    if(length(.lv) < 2){ .GlobalEnv$.kg_one_class <- TRUE; return(NULL) }
+  }
+
   fk <- rowSums(!is.na(mat)) >= 9
   mat <- mat[fk, , drop = FALSE]; info <- info[fk, , drop = FALSE]
   if(nrow(mat) == 0) return(NULL)

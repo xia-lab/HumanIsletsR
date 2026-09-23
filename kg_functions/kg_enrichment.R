@@ -83,6 +83,15 @@
 #               `contrast` is one value for all, or "|"-aligned with the phenotypes.
 #               Absent/empty -> the function is exactly the single-phenotype call it always was.
 #
+#               ⚠ WITH AN EMPTY `phenotype` THE BACKGROUND IS THE LIBRARY'S OWN UNIVERSE (user
+#               ruling 2026-09-22). There is then no cohort differential to build a universe from --
+#               the case of a subject the cohort holds no data on at all -- so the test becomes a
+#               statement about PUBLIC KNOWLEDGE and implies no cohort link. On this path the list
+#               must already be in the library's key space (entrez), because the only symbol map
+#               here is the omics annotation and using it would reimpose the measured background.
+#               Fewer than 5 of the given genes in the library universe -> RES-TOO-FEW-GENES.
+#               See `.kgEnrichListLibrary`.
+#
 # input         auto (DEFAULT) | userfolder | precompute
 #
 #               auto        USER FOLDER FIRST, then the precompute. Rationale: a user who
@@ -118,10 +127,14 @@
 #
 # Result:  kg_enrichment.csv + a timestamped copy. Returns "RES-OK;<n_sig>".
 #          With `features`, four columns say what was tested: Features_given, Features_matched (of
-#          those, found in the universe), Query_n and Universe_n (library identifiers).
+#          those, found in the universe), Query_n and Universe_n (library identifiers). The
+#          library-background path adds Background="library" and Source="knowledge_graph", so a
+#          reader can never mistake it for a cohort result.
 # Refusals: RES-NO-OMICS | RES-NO-LIBRARY | RES-NO-DIFFERENTIAL | RES-NO-UNIVERSE
 #         | RES-NO-KEY | RES-NO-ENRICH
 #         | RES-NO-FEATURES (with `features`: none of the listed features is in the universe)
+#         | RES-TOO-FEW-GENES;<matched>;<given>  (library background: fewer than 5 of the given
+#           genes are in the library universe -- too few for the test to mean anything)
 # ==============================================================================
 
 .kgEnrichDefaultCovs <- c("donorage", "donorsex", "bodymassindex",
@@ -225,7 +238,19 @@
   adj <- if("Adjusted_p_value" %in% names(d)) d$Adjusted_p_value
          else if("P_family" %in% names(d))    d$P_family
          else rep(NA_real_, nrow(d))
-  data.frame(FeatureId = as.character(d$Feature),
+  # ⚠ HAND BACK THE ID THIS LAYER'S ENRICHMENT IS KEYED ON (user ruling 2026-09-21: "protein's key
+  # is gene symbol"). The screen writes the omics table's own row id in `Feature` -- UniProt for
+  # protein, entrez for nanostring -- and the gene symbol beside it in `Symbol`. protein/nanostring/
+  # pbrna_* are keyed on `symbol` in `.kgEnrichLayer`, so those layers take the symbol; rnaseq
+  # (accession) and the metabolite layers (inchikey) are already spelled the way they are keyed and
+  # are read exactly as before.
+  ids <- as.character(d$Feature)
+  if(identical(.kgEnrichLayer(layer_key)$id, "symbol") && "Symbol" %in% names(d)){
+    sym <- as.character(d$Symbol)
+    keep <- !is.na(sym) & nzchar(sym) & sym != "NA"
+    ids[keep] <- sym[keep]
+  }
+  data.frame(FeatureId = ids,
              Effect    = suppressWarnings(as.numeric(d$Effect)),
              P_value   = suppressWarnings(as.numeric(d$P_value)),
              Adjusted_p_value = suppressWarnings(as.numeric(adj)),
@@ -288,6 +313,63 @@
   }
   if(is.null(de) || nrow(de) == 0) return(NULL)
   list(de = de, src = src)
+}
+
+# ---- ORA of a GIVEN list against the LIBRARY'S OWN universe (user ruling 2026-09-22) ---------------
+# REACHED WHEN `features` IS GIVEN AND `phenotype` IS EMPTY -- there is no cohort differential to
+# form a universe from, because the cohort holds no data on the subject at all. The background is
+# then the library's own gene universe, and the result is a statement about PUBLIC KNOWLEDGE that
+# implies no cohort link.
+#
+# ⚠ WHY NOT THE MEASURED UNIVERSE. The background in an ORA is the set a gene COULD have been drawn
+# from, and these genes were drawn by literature curation over all human genes -- not by anything we
+# measured. Using the measured set would quietly reimport the cohort into an answer that has no
+# cohort basis, and would read as "of the genes we measure...", as if our data had been consulted
+# about this disease. MEASURED 2026-09-22 over the 9 diseases that carry KG genes: 157 genes given,
+# 102 survive the measured background and 117 survive KEGG's -- pancreatitis alone goes 23 -> 40,
+# the difference being exocrine enzyme genes that islet RNA-seq does not carry.
+#
+# ⚠ THE LIST MUST ALREADY BE IN THE LIBRARY'S KEY SPACE (entrez for the gene libraries). The only
+# symbol -> entrez map on this machine is the omics annotation, which covers MEASURED features only,
+# so translating here would silently reimpose the measured background on the very test that exists
+# not to use it. The caller resolves the ids -- the graph carries `entrez_id` on every Gene node
+# (VERIFIED 2026-09-22: 149 of 149 distinct KG disease genes have one).
+#
+# ⚠ THE OVERLAP IS COMPUTED HERE, AS PART OF THE TEST, NEVER UPSTREAM (user ruling 2026-09-22: "the
+# overlap is test when doing the analysis, not you precompute anything"). A caller that pre-filtered
+# its own list could not report `Features_given` honestly, and the floor below would then be applied
+# to a number that had already been trimmed.
+.kgEnrichMinOverlap <- 5   # user ruling 2026-09-22: "don't run it under 5 genes"
+
+.kgEnrichListLibrary <- function(feats, library, fdr.n){
+  lib <- .kgLoadLibrary(library); if(is.null(lib)) return("RES-NO-LIBRARY")
+  uni <- unique(as.character(unlist(lib$sets)))
+  if(!length(uni)) return("RES-NO-UNIVERSE")
+  given <- unique(as.character(feats))
+  qa <- given[given %in% uni]
+  if(!length(qa)) return("RES-NO-FEATURES")
+  # too few to mean anything: ORA on a handful returns confident-looking numbers from noise, so it
+  # is REFUSED with its own code carrying both counts, never run and then explained away.
+  if(length(qa) < .kgEnrichMinOverlap)
+    return(paste0("RES-TOO-FEW-GENES;", length(qa), ";", length(given)))
+
+  er <- .kgOra(qa, uni, library, fdr.n)
+  if(is.null(er) || nrow(er) == 0) return("RES-NO-ENRICH")
+  er$Library    <- library
+  er$Source     <- "knowledge_graph"      # NOT a cohort result -- the answer must be able to say so
+  er$Background <- "library"
+  er$Features_given   <- length(given)
+  er$Features_matched <- length(qa)
+  er$Query_n    <- length(qa)
+  er$Universe_n <- length(uni)
+  er <- er[order(er$Adjusted_p_value), , drop = FALSE]
+  n.sig <- sum(er$Adjusted_p_value < fdr.n, na.rm = TRUE)
+
+  ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
+  utils::write.csv(er, paste0("kg_enrichment_kglist_", safe(library), "_", ts, ".csv"),
+                   row.names = FALSE)
+  utils::write.csv(er, "kg_enrichment.csv", row.names = FALSE)
+  paste0("RES-OK;", n.sig)
 }
 
 # ---- ORA of a GIVEN feature list (user ruling 2026-09-19) -------------------------------------------
@@ -391,9 +473,15 @@
   feats <- if(is.null(features) || is.na(features)) character(0)
            else trimws(strsplit(as.character(features), "|", fixed = TRUE)[[1]])
   feats <- feats[nzchar(feats)]
-  if(length(feats))
+  if(length(feats)){
+    # ⚠ NO PHENOTYPE MEANS NO COHORT UNIVERSE, AND THAT IS A DIFFERENT TEST -- not a failure.
+    # See `.kgEnrichListLibrary`. This combination could only ever return RES-NO-DIFFERENTIAL
+    # before (the first line of `.kgEnrichFeatureList`), so nothing that works today moves.
+    if(!nzchar(trimws(ifelse(is.null(phenotype) || is.na(phenotype), "", as.character(phenotype)))))
+      return(.kgEnrichListLibrary(feats, library, fdr.n))
     return(.kgEnrichFeatureList(feats, phenotype, contrast, omics_layer, lp, kp, library,
                                 covariates, input, fdr.n))
+  }
 
   # ---- get the differential; NEVER compute one (the rule lives in `.kgEnrichDE`) ----
   got <- .kgEnrichDE(phenotype, contrast, omics_layer, lp, covariates, input)

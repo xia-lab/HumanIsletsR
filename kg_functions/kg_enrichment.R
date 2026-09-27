@@ -166,6 +166,15 @@
     "protein"          = list(omics_id="proc_prot_v2",          tbl="proc_prot_combat",             id="symbol",    entity="gene"),
     "pbrna_alpha"      = list(omics_id="proc_pbrna_Alpha",      tbl="proc_pbrna_Alpha",             id="symbol",    entity="gene"),
     "pbrna_beta"       = list(omics_id="proc_pbrna_Beta",       tbl="proc_pbrna_Beta",              id="symbol",    entity="gene"),
+    # Delta and PP were missing while Alpha and Beta were here, so a delta- or PP-cell question had
+    # no layer this endpoint would accept and its enrichment refused -- MEASURED 2026-09-25 on F4:
+    # 101 of 1382 records, almost all of them delta/PP. The tables are the SAME SHAPE as Alpha/Beta
+    # (symbol, gene_id, ensembl, name) and donor-level, so they need no other handling.
+    # NOTE this is PSEUDOBULK (one value per donor), NOT the per-cell single-cell data, which lives
+    # in hdf5_V2/sc_<cell>_<glucose>.h5 as feature x CELL and is a different shape entirely -- see
+    # `_omics_token` in api/routes/agent.py, which returns None for single-cell on purpose.
+    "pbrna_delta"      = list(omics_id="proc_pbrna_Delta",      tbl="proc_pbrna_Delta",             id="symbol",    entity="gene"),
+    "pbrna_pp"         = list(omics_id="proc_pbrna_PP",         tbl="proc_pbrna_PP",                id="symbol",    entity="gene"),
     "metabolite_hg"    = list(omics_id="proc_metabolite_HG",    tbl="proc_metabolite_combat_HG",    id="inchikey",  entity="metabolite"),
     "metabolite_lg"    = list(omics_id="proc_metabolite_LG",    tbl="proc_metabolite_combat_LG",    id="inchikey",  entity="metabolite"),
     "metabolite_ratio" = list(omics_id="proc_metabolite_ratio", tbl="proc_metabolite_combat_ratio", id="inchikey",  entity="metabolite"),
@@ -205,6 +214,18 @@
   if(length(e) == 0) e <- "none"
   if(length(w) == 0) w <- "none"
   identical(w, e)
+}
+
+# the archive file's name must fit the file system (found 2026-09-26). The name carries every
+# phenotype key used, and a concept with many children (Calcium entry: 9, first second phase: 13)
+# made names of 297-301 characters; Mac and Linux refuse a file name over 255 bytes, so write.csv
+# failed with "cannot open the connection" AFTER the enrichment had run. Only a name that would not
+# fit is cut; every name that fits is unchanged. Nothing reads the archive by name (the contract is
+# kg_enrichment.csv), and the tail keeps library + timestamp so runs stay apart.
+.kgFitName <- function(stem, tail){
+  room <- 255L - nchar(tail, type = "bytes")
+  if(nchar(stem, type = "bytes") > room) stem <- substr(stem, 1L, room)
+  paste0(stem, tail)
 }
 
 # ---- source 1: the USER FOLDER (a previous kgAssoc SCREEN run) ----------------
@@ -428,8 +449,8 @@
   n.sig <- sum(er$Adjusted_p_value < fdr.n, na.rm = TRUE)
 
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
-  utils::write.csv(er, paste0("kg_enrichment_", safe(paste(used, collapse = "_")), "_list_",
-                              safe(library), "_", ts, ".csv"), row.names = FALSE)
+  utils::write.csv(er, .kgFitName(paste0("kg_enrichment_", safe(paste(used, collapse = "_"))),
+                                  paste0("_list_", safe(library), "_", ts, ".csv")), row.names = FALSE)
   utils::write.csv(er, "kg_enrichment.csv", row.names = FALSE)
   paste0("RES-OK;", n.sig)
 }
@@ -523,7 +544,8 @@
   n.sig <- sum(er$Adjusted_p_value < fdr.n, na.rm = TRUE)
 
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
-  utils::write.csv(er, paste0("kg_enrichment_", safe(phenotype), "_", safe(library), "_", ts, ".csv"), row.names = FALSE)
+  utils::write.csv(er, .kgFitName(paste0("kg_enrichment_", safe(phenotype)),
+                                  paste0("_", safe(library), "_", ts, ".csv")), row.names = FALSE)
   utils::write.csv(er, "kg_enrichment.csv", row.names = FALSE)
   paste0("RES-OK;", n.sig)
 }

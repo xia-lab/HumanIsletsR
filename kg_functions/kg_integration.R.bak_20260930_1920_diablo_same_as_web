@@ -45,55 +45,16 @@
 # kgDiablo -- supervised multi-omics integration (mixOmics DIABLO / block.splsda).
 # Finds a sparse multi-omics signature that separates the groups AND correlates across
 # blocks. phenotype must be categorical; `contrast`="A-B" restricts to two groups.
-# SAME METHOD AS THE WEBSITE DIABLO (web_tool_functions/humanislets_integration.R:
-# load_integ_omics + GetIntegPlot_impl, no covariates) -- change the two together:
-#   - each block: the same sqlite table and feature ids as the website, no imputation
-#   - SUPERVISED screen per block: keep the features most associated with the group
-#     (|limma moderated t|; rnaseq/pbrna 5000, protein 3000, metabolite 500, other 1000),
-#     then scale each feature
-#   - block.splsda(ncomp = 3, keepX = 25 per block per component, design 0.2)
-# ncomp / keepX / topVar are still accepted (the callers send them) but not used: the
-# website's fixed settings apply, so both give the same signature.
-# Writes kg_diablo.csv (Block/Component/Feature/Loading; Feature = gene symbol).
+# layers (>=2), ncomp, keepX (selected features per block per component), topVar
+# (variance pre-filter per block). Writes kg_diablo.csv (Block/Component/Feature/Loading).
 # ==============================================================================
-.kgDiabloLayer <- function(layer){
-  switch(tolower(layer),
-    "rnaseq"      = list(tbl="proc_rnaseq",               disp="RNA-seq",            cap=5000),
-    "nanostring"  = list(tbl="proc_nanostring_merge",     disp="Nanostring",         cap=1000),
-    "protein"     = list(tbl="proc_prot_combat",          disp="Protein",            cap=3000),
-    "pbrna_alpha" = list(tbl="proc_pbrna_Alpha",          disp="Pseudobulk (alpha)", cap=5000),
-    "pbrna_beta"  = list(tbl="proc_pbrna_Beta",           disp="Pseudobulk (beta)",  cap=5000),
-    "metabolite"  = list(tbl="proc_metabolite_combat_HG", disp="Metabolite (HG)",    cap=500),
-    NULL)
-}
-
-# one block as the website's load_integ_omics reads it: features x donors, rownames = the website
-# feature id, attr "symbol" = the display name per row.
-.kgDiabloBlock <- function(con, lp){
-  ft <- try(DBI::dbReadTable(con, lp$tbl), silent = TRUE); if(inherits(ft, "try-error")) return(NULL)
-  sym_or <- function(s, alt){ s <- as.character(s); e <- is.na(s) | s == ""; s[e] <- as.character(alt[e]); s }
-  if(lp$tbl == "proc_rnaseq"){
-    rn <- as.character(ft$accession); sym <- sym_or(ft$symbol, ft$accession)
-  } else if(lp$tbl == "proc_prot_combat"){
-    rn <- make.unique(sym_or(ft$symbol, ft$id)); sym <- rn
-  } else if(lp$tbl == "proc_nanostring_merge"){
-    rn <- as.character(ft$gene_id); sym <- sym_or(ft$symbol, ft$gene_id)
-  } else if(grepl("^proc_pbrna_", lp$tbl)){
-    rn <- make.unique(as.character(ft$symbol)); sym <- rn
-  } else {
-    rn <- as.character(ft$compound); sym <- rn
-  }
-  donor_cols <- grep("^R[0-9]+$", names(ft), value = TRUE)
-  if(length(donor_cols) == 0) return(NULL)
-  mat <- suppressWarnings(as.matrix(sapply(ft[, donor_cols, drop = FALSE], function(z) as.numeric(as.character(z)))))
-  rownames(mat) <- rn; attr(mat, "symbol") <- setNames(sym, rn)
-  mat
-}
-
 kgDiablo <- function(phenotype, contrast = "", layers = "rnaseq,protein",
                      ncomp = "2", keepX = "20", topVar = "2000", mode = "tool"){
   suppressMessages(library(mixOmics)); library(RSQLite); library(DBI)
   .kgSetPaths()
+  ncomp  <- max(1L, suppressWarnings(as.integer(ncomp)));  if(is.na(ncomp))  ncomp  <- 2L
+  keepXn <- max(2L, suppressWarnings(as.integer(keepX)));  if(is.na(keepXn)) keepXn <- 20L
+  topVar <- max(50L, suppressWarnings(as.integer(topVar))); if(is.na(topVar)) topVar <- 2000L
 
   m <- .kgLoadMetaFrame(); if(is.null(m)) return("RES-NO-META")
   if(!(phenotype %in% names(m))){
@@ -102,59 +63,43 @@ kgDiablo <- function(phenotype, contrast = "", layers = "rnaseq,protein",
   if(.kgInferType(m[[phenotype]]) != "disc") return("RES-NO-DISC")   # DIABLO is supervised
 
   lids <- trimws(strsplit(layers, "[,;]")[[1]]); lids <- lids[nzchar(lids)]
-  lps  <- lapply(lids, .kgDiabloLayer); names(lps) <- lids; lps <- lps[!sapply(lps, is.null)]
+  lps  <- lapply(lids, .kgIntLayer); names(lps) <- lids; lps <- lps[!sapply(lps, is.null)]
   if(length(lps) < 2) return("RES-NO-OMICS")
 
   con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite")); on.exit(dbDisconnect(con), add = TRUE)
-  blocks <- list()
-  for(nm in names(lps)){ b <- .kgDiabloBlock(con, lps[[nm]]); if(!is.null(b)) blocks[[nm]] <- b }
+  blocks <- list(); disp <- character(0)
+  for(nm in names(lps)){ b <- .kgIntBlock(con, lps[[nm]], topVar); if(!is.null(b)){ blocks[[nm]] <- b; disp[nm] <- lps[[nm]]$disp } }
   if(length(blocks) < 2) return("RES-NO")
 
-  # outcome + donor alignment (website: donors in every block with a value in the compared groups)
+  # outcome + donor alignment
   yv <- setNames(as.character(m[[phenotype]]), as.character(m[["record_id"]]))
   grp <- if(nzchar(contrast)){ p <- trimws(strsplit(contrast,"-",fixed=TRUE)[[1]]); if(length(p)==2) p else NULL } else NULL
-  shared <- Reduce(intersect, lapply(blocks, colnames))
-  shared <- shared[!is.na(yv[shared]) & yv[shared] != "" & yv[shared] != "NA"]
-  if(!is.null(grp)) shared <- shared[yv[shared] %in% grp]
-  Y <- factor(yv[shared], levels = if(!is.null(grp)) grp else sort(unique(yv[shared])))
-  counts <- table(Y)
-  if(length(counts) < 2 || any(counts < 3) || length(shared) < 10) return("RES-NO")   # website: >= 3 per group, >= 10 donors
-  names(Y) <- shared
+  keep.donor <- Reduce(intersect, lapply(blocks, rownames))
+  keep.donor <- keep.donor[!is.na(yv[keep.donor]) & yv[keep.donor] != "" & yv[keep.donor] != "NA"]
+  if(!is.null(grp)) keep.donor <- keep.donor[yv[keep.donor] %in% grp]
+  if(length(keep.donor) < 20) return("RES-NO")
 
-  # SUPERVISED screen + per-feature scaling (website GetIntegPlot_impl, the kpList step)
-  yvec_screen <- droplevels(factor(Y))
-  X <- lapply(names(blocks), function(nm){
-    xm <- blocks[[nm]][, shared, drop = FALSE]
-    top_k <- min(nrow(xm), lps[[nm]]$cap)
-    score <- tryCatch({
-      fit <- limma::eBayes(limma::lmFit(xm, model.matrix(~ yvec_screen)))
-      yc  <- grep("yvec_screen", colnames(fit$t))
-      if (length(yc) == 0) yc <- ncol(fit$t)
-      sc  <- matrixStats::rowMaxs(abs(as.matrix(fit$t[, yc, drop = FALSE])))
-      sc[is.na(sc)] <- 0
-      sc
-    }, error = function(e) matrixStats::rowMads(xm, na.rm = TRUE))
-    xm <- xm[order(score, decreasing = TRUE)[seq_len(top_k)], , drop = FALSE]
-    scale(t(xm), center = TRUE, scale = TRUE)              # donors x features
-  })
-  names(X) <- names(blocks)
+  X <- lapply(blocks, function(b) b[keep.donor, , drop = FALSE])
+  Y <- factor(yv[keep.donor])
+  if(length(levels(Y)) < 2) return("RES-NO")
+  ncomp <- min(ncomp, length(levels(Y)) - 1L + 1L)   # splsda supports up to (#classes-1)+ comps; keep modest
 
-  design <- matrix(0.2, nrow = length(X), ncol = length(X), dimnames = list(names(X), names(X))); diag(design) <- 0
-  kx <- lapply(X, function(z) rep(min(25, ncol(z)), 3))
-  set.seed(12345)
-  fit <- try(mixOmics::block.splsda(X = X, Y = Y, ncomp = 3, keepX = kx, design = design), silent = TRUE)
+  design <- matrix(0.1, nrow = length(X), ncol = length(X)); diag(design) <- 0
+  keepX.list <- lapply(X, function(z) rep(min(keepXn, ncol(z)), ncomp)); names(keepX.list) <- names(X)
+
+  fit <- try(mixOmics::block.splsda(X = X, Y = Y, ncomp = ncomp, keepX = keepX.list, design = design),
+             silent = TRUE)
   if(inherits(fit, "try-error")) return(paste0("RES-NO-FIT;", conditionMessage(attr(fit, "condition"))))
 
   rows <- list()
   for(nm in names(X)){
-    sym <- attr(blocks[[nm]], "symbol")
-    for(cc in 1:3){
+    for(cc in seq_len(ncomp)){
       sv <- try(mixOmics::selectVar(fit, block = nm, comp = cc), silent = TRUE)
       if(inherits(sv, "try-error") || is.null(sv[[nm]])) next
       nmv <- sv[[nm]]$name; ld <- sv[[nm]]$value$value.var
       if(length(nmv) == 0) next
       rows[[length(rows)+1]] <- data.frame(
-        Block = lps[[nm]]$disp, Component = cc, Feature = unname(sym[as.character(nmv)]),
+        Block = unname(disp[nm]), Component = cc, Feature = as.character(nmv),
         Loading = signif(unname(ld), 3), stringsAsFactors = FALSE)
     }
   }
@@ -164,7 +109,7 @@ kgDiablo <- function(phenotype, contrast = "", layers = "rnaseq,protein",
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
   utils::write.csv(out, paste0("kg_diablo_", safe(phenotype), "_", ts, ".csv"), row.names = FALSE)
   utils::write.csv(out, "kg_diablo.csv", row.names = FALSE)
-  paste0("RES-OK;", nrow(out), ";n_donors=", length(shared))
+  paste0("RES-OK;", nrow(out), ";n_donors=", length(keep.donor))
 }
 
 

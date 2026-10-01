@@ -2848,13 +2848,15 @@ GetMofaCircos <- function(base_path, combo, factor = "Factor1", topN = "15", don
 
   expr_dir <- paste0(base_path, "omics/")
   get_expr_info <- function(omicsType) {
-    if (omicsType == "rnaseq") list(file = "rnaseq_filtered.csv", id_col = "accession", meta_cols = 5)
+    # RNA-seq: the multi-omics input MOFA was trained on (vst + ComBat; same genes/columns as rnaseq_filtered.csv)
+    if (omicsType == "rnaseq") list(file = "rnaseq_vst.csv", id_col = "accession", meta_cols = 5)
     else if (omicsType == "proteomics") list(file = "proteomics_v2.csv", id_col = "symbol", meta_cols = 4, fallback_col = "Protein_Group")
     else if (omicsType == "nanostring") list(file = "nanostring.csv", id_col = "symbol", meta_cols = 4)
     else if (omicsType == "methylation") list(file = "methylation_M.csv", id_col = "feature_id", meta_cols = 8)
     else if (omicsType %in% c("pseudobulk_alpha", "pseudobulk_beta", "patchseq_alpha", "patchseq_beta")) {
       cell <- sub("^(pseudobulk|patchseq)_", "", omicsType)
-      list(file = paste0("pseudobulk_", cell, ".csv"), id_col = "gene_id", meta_cols = 3)
+      # mofa_pipeline.R load_pseudobulk: features named by symbol; 4 annotation columns (symbol, gene_id, ensembl, name)
+      list(file = paste0("pseudobulk_", cell, ".csv"), id_col = "symbol", meta_cols = 4)
     }
     else if (omicsType %in% c("flux_HG", "flux_LG", "flux_ratio")) list(file = paste0(omicsType, ".csv"), id_col = "rxn", meta_cols = 4)
     else NULL
@@ -2874,10 +2876,12 @@ GetMofaCircos <- function(base_path, combo, factor = "Factor1", topN = "15", don
     top <- utils::head(w, topN)
     if (nrow(top) == 0) next
     # Big matrices (CpG-level methylation) read only the top-N rows; others read whole.
+    # fread(strip.white = FALSE) = identical table to read.csv(stringsAsFactors = FALSE, check.names = FALSE), much faster
+    # (rnaseq_vst.csv: 40 s -> 0.5 s)
     expr <- if (identical(om, "methylation"))
               .circos_read_expr_subset(paste0(expr_dir, info$file), top$feature_id)
             else
-              read.csv(paste0(expr_dir, info$file), stringsAsFactors = FALSE, check.names = FALSE)
+              data.table::fread(paste0(expr_dir, info$file), data.table = FALSE, strip.white = FALSE)
     if (is.null(expr) || nrow(expr) == 0) next
     # Rebuild the feature id EXACTLY as the pipeline built weights$feature_id, so
     # rownames are unique AND line up with the weights (no crash, nothing dropped):

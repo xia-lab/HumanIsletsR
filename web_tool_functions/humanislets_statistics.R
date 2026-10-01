@@ -2095,7 +2095,7 @@ if(omicsType == "proc_methylation"){
     contrast.matrix <- do.call(makeContrasts, myargs)
     
     # get results
-    fit <- lmFit(feature_table, design, trend = TRUE, robust = TRUE)
+    fit <- lmFit(feature_table, design)
     # Save limma objects for CAMERA (flux only)
     if(omicsType == "proc_flux"){
       qs::qsave(fit,             "camera_fit.qs")
@@ -2104,7 +2104,9 @@ if(omicsType == "proc_methylation"){
       qs::qsave("disc",          "camera_type.qs")
     }
     fit <- contrasts.fit(fit, contrast.matrix)
-    fit <- eBayes(fit)
+    # features with no values in the analysed donors have no result (dropped below) and would stop limma-trend
+    fit <- fit[is.finite(fit$Amean), ]
+    fit <- eBayes(fit, trend = TRUE, robust = TRUE)
     res.table <- topTable(fit, number = Inf)
     
     # Remove coefficients for ANOVA contrasts
@@ -2137,7 +2139,7 @@ if(omicsType == "proc_methylation"){
     }
     
     # get results
-    fit <- lmFit(feature_table, design, trend = TRUE, robust = TRUE)
+    fit <- lmFit(feature_table, design)
     # Save limma objects for CAMERA (flux only)
     if(omicsType == "proc_flux"){
       qs::qsave(fit,          "camera_fit.qs")
@@ -2145,7 +2147,9 @@ if(omicsType == "proc_methylation"){
       qs::qsave(feature_table,"camera_features.qs")
       qs::qsave("cont",       "camera_type.qs")
     }
-    fit <- eBayes(fit)
+    # features with no values in the analysed donors have no result (dropped below) and would stop limma-trend
+    fit <- fit[is.finite(fit$Amean), ]
+    fit <- eBayes(fit, trend = TRUE, robust = TRUE)
     res.table <- topTable(fit, number = Inf, coef = analysisVar)
     colnames(res.table)[1] <- "Coefficient"
     
@@ -2725,7 +2729,7 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
 
   form <- if(length(covs)) as.formula(paste("~ .grp +", paste(sprintf("`%s`", covs), collapse = " + "))) else as.formula("~ .grp")
   design <- model.matrix(form, data = meta)
-  fit <- tryCatch(eBayes(lmFit(expr, design, trend = TRUE, robust = TRUE)), error = function(e) NULL)
+  fit <- tryCatch(eBayes(lmFit(expr, design), trend = TRUE, robust = TRUE), error = function(e) NULL)
   if(is.null(fit)) return("RES-NO; limma fit failed")
   if(!(".grpA" %in% colnames(fit$coefficients))) return("RES-NO; group coefficient missing")
   res <- topTable(fit, coef = ".grpA", number = Inf, sort.by = "P")
@@ -2811,7 +2815,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   if(nrow(expr) < 5) return("RES-NO; too few measurable features")
   design <- model.matrix(form, data = meta)
   if(!(coefName %in% colnames(design))) return("RES-NO; design coefficient missing")
-  fit <- tryCatch(eBayes(lmFit(expr, design, trend = TRUE, robust = TRUE)), error = function(e) NULL)
+  fit <- tryCatch(eBayes(lmFit(expr, design), trend = TRUE, robust = TRUE), error = function(e) NULL)
   if(is.null(fit)) return("RES-NO; limma fit failed")
   res <- topTable(fit, coef = coefName, number = Inf, sort.by = "P")
   out <- data.frame(Feature = rownames(res), log2FC = round(res$logFC, 4), AveExpr = round(res$AveExpr, 4),
@@ -2905,7 +2909,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
 
   form <- if(length(covs)) as.formula(paste("~ .grp +", paste(sprintf("`%s`", covs), collapse = " + "))) else as.formula("~ .grp")
   design <- model.matrix(form, data = meta)
-  fit <- tryCatch(eBayes(lmFit(expr, design, trend = TRUE, robust = TRUE)), error = function(e) NULL)
+  fit <- tryCatch(eBayes(lmFit(expr, design), trend = TRUE, robust = TRUE), error = function(e) NULL)
   if(is.null(fit)) return("RES-NO; limma fit failed")
   if(!(".grpA" %in% colnames(fit$coefficients))) return("RES-NO; group coefficient missing")
   res <- topTable(fit, coef = ".grpA", number = Inf, sort.by = "P")
@@ -3037,7 +3041,7 @@ endotypeOmicsFeature <- function(omicsType, feature) {
   if(nrow(expr) < 5) return("RES-NO; too few measurable features")
   design <- model.matrix(form, data = meta)
   if(!(coefName %in% colnames(design))) return("RES-NO; design coefficient missing")
-  fit <- tryCatch(eBayes(lmFit(expr, design, trend = TRUE, robust = TRUE)), error = function(e) NULL)
+  fit <- tryCatch(eBayes(lmFit(expr, design), trend = TRUE, robust = TRUE), error = function(e) NULL)
   if(is.null(fit)) return("RES-NO; limma fit failed")
   res <- topTable(fit, coef = coefName, number = Inf, sort.by = "P")
   out <- data.frame(Feature = rownames(res), log2FC = round(res$logFC, 4),

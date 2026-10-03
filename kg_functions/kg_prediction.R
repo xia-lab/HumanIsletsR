@@ -110,8 +110,11 @@ kgSingleFeaturePredict <- function(var_id, outcome, var_type = "auto",
   con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite")); on.exit(dbDisconnect(con), add = TRUE)
 
   rows <- list()
-  for(la in r$layers){
-    if(!is.null(allow) && !(la$display %in% allow)) next
+  # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R), each read through its own row filter and
+  # reported under its tissue label; a filter naming the resolver's own "Environmental contaminants" keeps both
+  for(la in unlist(lapply(r$layers, .kgTissueLayers), recursive = FALSE)){
+    if(!is.null(allow) && !(la$display %in% allow) &&
+       !(!is.null(la$base_display) && la$base_display %in% allow)) next
     fv <- .kgFeatureVector(con, la); if(is.null(fv)) next
 
     if(is_cont){

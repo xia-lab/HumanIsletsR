@@ -135,9 +135,13 @@
 }
 
 # a single feature's per-donor values (R### donors; bulk = all, pbrna = its R### subset).
+# `tuple$rowfilter` (a tissue layer from `.kgTissueLayers`) narrows to that tissue's row; absent = unchanged.
 .kgFeatureVector <- function(con, tuple){
   sql <- sprintf('SELECT * FROM %s WHERE "%s" = ?', tuple$table, tuple$read_col)
-  row <- try(DBI::dbGetQuery(con, sql, params = list(tuple$read_val)), silent = TRUE)
+  for(fc in names(tuple$rowfilter)) sql <- paste0(sql, sprintf(' AND "%s" = ?', fc))
+  row <- try(DBI::dbGetQuery(con, sql, params = unname(c(list(tuple$read_val),
+                                                         lapply(tuple$rowfilter, as.character)))),
+             silent = TRUE)
   if(inherits(row, "try-error") || nrow(row) == 0) return(NULL)
   row <- row[1, , drop = FALSE]
   donor_cols <- grep("^R[0-9]+$", names(row), value = TRUE)
@@ -242,9 +246,50 @@
 # Donor columns are stored REAL, so numeric columns are kept as-is; only genuinely
 # non-numeric columns are coerced. (The old as.numeric(as.character()) round-trip on
 # already-numeric columns cost ~20s per table -- pure waste.) Returns list(mat, info).
-.kgLoadLayerMatrix <- function(con, tbl, id_col){
+# ---- CONTAMINANTS: ONE LAYER PER TISSUE (user 2026-10-01) --------------------
+# proc_contaminants holds every chemical under one `Compound` id FOUR times (Tissue Adipose|Pancreas x LOG_corrected
+# true|false), and every reader keyed on the id took the FIRST row -- 57 chemicals' ADIPOSE values + the 2 measured only
+# in pancreas, one unlabelled mix (MEASURED on op1, F11 "What about in female donors?"; then found in op9 kgCorr,
+# kgFeatureCorr, op2 kgSingleFeaturePredict, op14 kgPanelROC, kgSeries and op13 kgMediation -- user: "fix the other R
+# functions that mix contaminant tissues"). These pieces are the ONE place that knows it: each tissue is its own layer,
+# read through a row filter (`.kgLoadLayerMatrix`, `.kgFeatureRows`, `.kgFeatureVector`) and reported under the label
+# every stored edge carries (`r.omics_type`). LOD-corrected rows only -- the precompute's own choice
+# (1_omics_meta_associations_v2.R S5: per tissue, LOD_corrected = "true").
+.kgContaminantTable <- "proc_contaminants"
+.kgContaminantTissues <- list(
+  list(label = "Environmental contaminants (adipose)",
+       rowfilter = list(Tissue = "Adipose", LOG_corrected = "true")),
+  list(label = "Environmental contaminants (pancreas)",
+       rowfilter = list(Tissue = "Pancreas", LOG_corrected = "true")))
+
+# a resolver layer tuple (display, table, read_col, read_val) -> the layers to read: one per TISSUE for the
+# contaminant table (display = the tissue label, `rowfilter` set, `base_display` = the resolver's own name), the
+# tuple itself for every other table.
+.kgTissueLayers <- function(la){
+  if(!identical(as.character(la$table), .kgContaminantTable)) return(list(la))
+  lapply(.kgContaminantTissues, function(ct)
+    utils::modifyList(la, list(display = ct$label, rowfilter = ct$rowfilter, base_display = la$display)))
+}
+
+# does a lower-cased layer filter name this layer? A tissue layer answers to its tissue label AND to the resolver's
+# own name ("environmental contaminants" = both tissues), so a filter written before the split still selects it.
+.kgDisplayIn <- function(la, lay_filter){
+  tolower(la$display) %in% lay_filter ||
+    (!is.null(la$base_display) && tolower(la$base_display) %in% lay_filter)
+}
+
+# `rowfilter` (optional, list(column = value)): keep only the table rows carrying those values BEFORE the per-id
+# dedup. proc_contaminants holds every chemical FOUR times (Tissue Adipose|Pancreas x LOG_corrected true|false) under
+# one `Compound` id, so without it the dedup kept whichever row came first -- Adipose for 58 chemicals, Pancreas for
+# the 2 measured only there, one unlabelled mix (MEASURED 2026-10-01, F11 "What about in female donors?"). NULL = the
+# whole table, exactly as before.
+.kgLoadLayerMatrix <- function(con, tbl, id_col, rowfilter = NULL){
   ft <- try(DBI::dbReadTable(con, tbl), silent = TRUE)
   if(inherits(ft, "try-error")) return(NULL)
+  for(fc in names(rowfilter)){
+    if(!(fc %in% names(ft))) return(NULL)
+    ft <- ft[!is.na(ft[[fc]]) & as.character(ft[[fc]]) == as.character(rowfilter[[fc]]), , drop = FALSE]
+  }
   ids <- as.character(ft[[id_col]])
   keep <- !is.na(ids) & nzchar(ids) & !duplicated(ids)
   ft <- ft[keep, , drop = FALSE]; ids <- ids[keep]
@@ -537,11 +582,15 @@
 
 # read NAMED features' rows from a layer in ONE query (features x donor matrix, coercion-
 # correct). read_vals = the resolver read_val per feature. Returns list(mat, id, symbol).
-.kgFeatureRows <- function(con, tbl, id_col, read_vals){
+# `rowfilter`: the same optional list(column = value) as `.kgLoadLayerMatrix` -- one row per id for a table that holds
+# several rows per id (proc_contaminants: tissue x LOD correction). NULL = unchanged.
+.kgFeatureRows <- function(con, tbl, id_col, read_vals, rowfilter = NULL){
   read_vals <- unique(as.character(read_vals)); if(length(read_vals) == 0) return(NULL)
   ph  <- paste(rep("?", length(read_vals)), collapse = ",")
   sql <- sprintf('SELECT * FROM %s WHERE "%s" IN (%s)', tbl, id_col, ph)
-  ft  <- try(DBI::dbGetQuery(con, sql, params = as.list(read_vals)), silent = TRUE)
+  for(fc in names(rowfilter)) sql <- paste0(sql, sprintf(' AND "%s" = ?', fc))
+  ft  <- try(DBI::dbGetQuery(con, sql, params = unname(c(as.list(read_vals),
+                                                         lapply(rowfilter, as.character)))), silent = TRUE)
   if(inherits(ft, "try-error") || nrow(ft) == 0) return(NULL)
   donor_cols <- grep("^R[0-9]+$", names(ft), value = TRUE); if(length(donor_cols) == 0) return(NULL)
   sub <- ft[, donor_cols, drop = FALSE]

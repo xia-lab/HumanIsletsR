@@ -46,10 +46,16 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   same_base <- base_type(ra$type) == base_type(rb$type)
 
   rows <- list()
-  for(la in ra$layers){
-    for(lb in rb$layers){
-      if(same_base && !identical(la$table, lb$table)) next
-      if(!is.null(allow) && !(la$display %in% allow) && !(lb$display %in% allow)) next
+  # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R) -- a tissue is a layer, so two contaminants pair
+  # only within ONE tissue (same table AND same row filter), exactly as two genes pair only within one platform; a
+  # filter naming the resolver's own "Environmental contaminants" still selects both tissues (`base_display`).
+  lays_a <- unlist(lapply(ra$layers, .kgTissueLayers), recursive = FALSE)
+  lays_b <- unlist(lapply(rb$layers, .kgTissueLayers), recursive = FALSE)
+  .allowed <- function(l) l$display %in% allow || (!is.null(l$base_display) && l$base_display %in% allow)
+  for(la in lays_a){
+    for(lb in lays_b){
+      if(same_base && !(identical(la$table, lb$table) && identical(la$rowfilter, lb$rowfilter))) next
+      if(!is.null(allow) && !.allowed(la) && !.allowed(lb)) next
       va <- .kgFeatureVector(con, la); vb <- .kgFeatureVector(con, lb)
       if(is.null(va) || is.null(vb)) next
       used_cov <- ""

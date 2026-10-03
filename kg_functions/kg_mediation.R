@@ -147,8 +147,10 @@
   # factor, so the caller can say which one to cut rather than silently trimming.
   lay_of <- list(); n_pairs <- 0L
   for(tk in names(feats)){
-    ls <- feats[[tk]]$layers
-    if(!is.null(lay_filter)) ls <- Filter(function(l) tolower(l$display) %in% lay_filter, ls)
+    # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R): each tissue is its own mediation, reported
+    # under its tissue label; a filter naming the resolver's own "Environmental contaminants" keeps both
+    ls <- unlist(lapply(feats[[tk]]$layers, .kgTissueLayers), recursive = FALSE)
+    if(!is.null(lay_filter)) ls <- Filter(function(l) .kgDisplayIn(l, lay_filter), ls)
     if(length(ls)){ lay_of[[tk]] <- ls; n_pairs <- n_pairs + length(ls) * length(phenos) }
   }
   if(length(lay_of) == 0) return("RES-NO-RESOLVE")
@@ -177,9 +179,9 @@
   # to one-per-layer. Identical rows, identical order; only the number of round trips moves.
   groups <- list()
   for(tk in names(lay_of)) for(la in lay_of[[tk]]){
-    key <- paste(la$table, la$read_col, sep = "\r")
+    key <- paste(la$table, la$read_col, if(is.null(la$rowfilter)) "" else la$display, sep = "\r")
     if(is.null(groups[[key]]))
-      groups[[key]] <- list(table = la$table, read_col = la$read_col,
+      groups[[key]] <- list(table = la$table, read_col = la$read_col, rowfilter = la$rowfilter,
                             toks = character(0), vals = character(0), disp = character(0))
     groups[[key]]$toks <- c(groups[[key]]$toks, tk)
     groups[[key]]$vals <- c(groups[[key]]$vals, la$read_val)
@@ -187,7 +189,7 @@
   }
 
   for(g in groups){
-    fr <- .kgFeatureRows(con, g$table, g$read_col, g$vals)
+    fr <- .kgFeatureRows(con, g$table, g$read_col, g$vals, g$rowfilter)
     if(is.null(fr)) next
     for(gi in seq_along(g$toks)){
       tk <- g$toks[gi]; la <- list(display = g$disp[gi])

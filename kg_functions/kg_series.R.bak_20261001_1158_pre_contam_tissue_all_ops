@@ -159,11 +159,8 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
     for(la in r$layers){
       lk <- .kgLayerKey(la$display)
       if(!(lk %in% .kgAllLayerKeys)) next
-      # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R), each read through its own row filter
-      for(la2 in .kgTissueLayers(la)){
-        if(!is.null(lay_filter) && !(lk %in% lay_filter || .kgDisplayIn(la2, lay_filter))) next
-        feats[[length(feats)+1]] <- list(token = tk, etype = r$type, layer = la2)
-      }
+      if(!is.null(lay_filter) && !(lk %in% lay_filter || tolower(la$display) %in% lay_filter)) next
+      feats[[length(feats)+1]] <- list(token = tk, etype = r$type, layer = la)
     }
   }
   if(length(feats) == 0) return("RES-NO-RESOLVE")
@@ -177,7 +174,7 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   for(k in unique(key)){
     idx <- which(key == k); la <- feats[[idx[1]]]$layer
     rvals <- vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1))
-    FR <- .kgFeatureRows(con, la$table, la$read_col, rvals, la$rowfilter); if(is.null(FR)) next
+    FR <- .kgFeatureRows(con, la$table, la$read_col, rvals); if(is.null(FR)) next
     dcommon <- intersect(colnames(FR$mat), keep_ids); if(length(dcommon) < minN) next
     rpos <- match(rvals, FR$id)
 

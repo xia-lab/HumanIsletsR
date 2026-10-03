@@ -115,11 +115,15 @@
     out <- list()
     for(ln in lays){
       lp <- .kgScreenLayer(ln); if(is.null(lp)) next
-      L  <- .kgLoadLayerMatrix(con, lp[1], lp[2]); if(is.null(L)) next
-      rownames(L$mat) <- paste0(L$info$FeatureId, "@@", ln)
-      out[[length(out)+1]] <- list(mat = L$mat, meta = data.frame(
-        Token = L$info$FeatureId, Symbol = L$info$Symbol, Id = L$info$FeatureId, Kind = "feature",
-        Entity = .kgLayerEntity(tolower(ln)), Layer = ln, stringsAsFactors = FALSE))
+      # the contaminant table is one layer PER TISSUE (`.kgTissueLayers`, kg_common.R); every other key reads as before
+      for(tl in .kgTissueLayers(list(display = ln, table = lp[1], read_col = lp[2]))){
+        L  <- .kgLoadLayerMatrix(con, lp[1], lp[2], tl$rowfilter); if(is.null(L)) next
+        lname <- if(is.null(tl$rowfilter)) ln else tl$display
+        rownames(L$mat) <- paste0(L$info$FeatureId, "@@", lname)
+        out[[length(out)+1]] <- list(mat = L$mat, meta = data.frame(
+          Token = L$info$FeatureId, Symbol = L$info$Symbol, Id = L$info$FeatureId, Kind = "feature",
+          Entity = .kgLayerEntity(tolower(ln)), Layer = lname, stringsAsFactors = FALSE))
+      }
     }
     if(length(out) == 0) return(NULL)
     return(list(mat  = .kgCorrBind(lapply(out, function(o) o$mat)),
@@ -133,17 +137,23 @@
     for(la in r$layers){
       lk <- .kgLayerKey(la$display)
       if(!(lk %in% .kgAllLayerKeys)) next
-      if(!is.null(lay_filter) && !(lk %in% lay_filter || tolower(la$display) %in% lay_filter)) next
-      items[[length(items)+1]] <- list(token = tk, etype = r$type, layer = la, key = lk)
+      # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R): its label is the layer name
+      for(la2 in .kgTissueLayers(la)){
+        if(!is.null(lay_filter) && !(lk %in% lay_filter || .kgDisplayIn(la2, lay_filter))) next
+        items[[length(items)+1]] <- list(token = tk, etype = r$type, layer = la2,
+                                         key = if(is.null(la2$rowfilter)) lk else la2$display)
+      }
     }
   }
   if(length(items) == 0) return(NULL)
-  grp <- vapply(items, function(f) paste(f$layer$table, f$layer$read_col, sep = "@@"), character(1))
+  grp <- vapply(items, function(f) paste(f$layer$table, f$layer$read_col,
+                                          if(is.null(f$layer$rowfilter)) "" else f$layer$display, sep = "@@"),
+                character(1))
   out <- list()
   for(g in unique(grp)){
     idx <- which(grp == g); la <- items[[idx[1]]]$layer
     rv  <- unique(vapply(items[idx], function(f) as.character(f$layer$read_val), character(1)))
-    FR  <- .kgFeatureRows(con, la$table, la$read_col, rv); if(is.null(FR)) next
+    FR  <- .kgFeatureRows(con, la$table, la$read_col, rv, la$rowfilter); if(is.null(FR)) next
     pos <- match(vapply(items[idx], function(f) as.character(f$layer$read_val), character(1)), FR$id)
     keep <- !is.na(pos); if(!any(keep)) next
     mm  <- FR$mat[pos[keep], , drop = FALSE]

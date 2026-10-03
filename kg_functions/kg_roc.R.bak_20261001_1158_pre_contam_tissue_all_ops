@@ -123,20 +123,14 @@
   # ---- ONE READ PER LAYER, not one per feature (the N+1 already fixed elsewhere) -------
   con <- dbConnect(SQLite(), db.path); on.exit(dbDisconnect(con), add = TRUE)
   groups <- list()
-  tissue_used <- character(0)     # the contaminant tissue(s) read -- named in the output when `layer` is "all"
   for(tk in names(feats)){
-    # one layer per contaminant TISSUE (`.kgTissueLayers`, kg_common.R): the panel is layer-scoped, so a contaminant
-    # panel takes the tissue the `layer` names ("Environmental contaminants (pancreas)" -- which matched nothing
-    # before the split) and, with none named, the first tissue for EVERY contaminant -- never adipose for some and
-    # pancreas for others, which is what the first-row read did for the 2 chemicals measured only in pancreas
-    ls <- unlist(lapply(feats[[tk]]$layers, .kgTissueLayers), recursive = FALSE)
-    if(!is.null(lay_filter)) ls <- Filter(function(l) .kgDisplayIn(l, lay_filter), ls)
+    ls <- feats[[tk]]$layers
+    if(!is.null(lay_filter)) ls <- Filter(function(l) tolower(l$display) %in% lay_filter, ls)
     if(length(ls)){
       la <- ls[[1]]                       # ONE layer per feature: the panel is layer-scoped
-      if(!is.null(la$rowfilter)) tissue_used <- unique(c(tissue_used, la$display))
-      key <- paste(la$table, la$read_col, if(is.null(la$rowfilter)) "" else la$display, sep = "\r")
+      key <- paste(la$table, la$read_col, sep = "\r")
       if(is.null(groups[[key]]))
-        groups[[key]] <- list(table = la$table, read_col = la$read_col, rowfilter = la$rowfilter,
+        groups[[key]] <- list(table = la$table, read_col = la$read_col,
                               toks = character(0), vals = character(0))
       groups[[key]]$toks <- c(groups[[key]]$toks, tk)
       groups[[key]]$vals <- c(groups[[key]]$vals, la$read_val)
@@ -145,7 +139,7 @@
   if(length(groups) == 0) return("RES-NO-RESOLVE")
   cols <- list()
   for(g in groups){
-    fr <- .kgFeatureRows(con, g$table, g$read_col, g$vals, g$rowfilter)
+    fr <- .kgFeatureRows(con, g$table, g$read_col, g$vals)
     if(is.null(fr)) next
     for(i in seq_along(g$toks)){
       ri <- match(g$vals[i], rownames(fr$mat)); if(is.na(ri)) next
@@ -240,8 +234,7 @@
     auc = auc, auc_lo = auc_lo, auc_hi = auc_hi,
     n_donors = length(y_ok), n_pos = sum(y_ok == 1), n_neg = sum(y_ok == 0),
     n_features = ncol(X), outcome = outcome, level_pos = lv[1], level_neg = lv[2],
-    layer = if(identical(layer, "all") && length(tissue_used)) paste(tissue_used, collapse = ";") else layer,
-    covariates = if(length(covuniv)) paste(covuniv, collapse = ";") else "none",
+    layer = layer, covariates = if(length(covuniv)) paste(covuniv, collapse = ";") else "none",
     folds = folds, repeats = repeats, alpha = alpha, boot = boot,
     model = "logistic elastic-net (cv.glmnet), out-of-fold probabilities",
     caveat = paste("features were SELECTED as significant on these same donors, so the AUC is",

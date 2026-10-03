@@ -2494,11 +2494,13 @@ convert_gpr_to_r <- function(rule, present_genes) {
 ##   covariates     : semicolon-separated phenotype column names ("" = none -> Welch)
 ##   subsetKey      : "" = all donors; else reads donors_<subsetKey>.rds written by the app-filter phenotype filter
 ##   sourceFilter   : "all" | "omics" | "predicted"
+## Predictor rule (v2 clusters): phenotypes listed in predictor_phenotypes.csv (the assays the cluster prediction used)
+## are compared in omics donors only, never in predicted donors, whose cluster was predicted from those values.
 ## ============================================================================
 compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "",
                                   sourceFilter = "all", fdr = "true", pvalThresh = "0.05") {
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   pheno_file <- paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv")
   if(!file.exists(paste0(deliv, "donor_states.csv")) || !file.exists(pheno_file)){
     return("RES-NO; required input tables not found")
@@ -2510,6 +2512,8 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
   states$donor_id <- as.character(states$donor_id)
   pheno$sample_id <- as.character(pheno$sample_id)
   meta <- merge(states, pheno, by.x = "donor_id", by.y = "sample_id")
+  pfile <- paste0(deliv, "predictor_phenotypes.csv")
+  pred.cols <- if(file.exists(pfile)) as.character(read.csv(pfile, stringsAsFactors = FALSE)$phenotype_column) else character(0)
 
   if(sourceFilter == "omics")         meta <- meta[meta$source == "omics", ]
   if(sourceFilter == "predicted")     meta <- meta[meta$source == "predicted", ]
@@ -2553,9 +2557,11 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
   for(i in seq_len(nrow(featdef))){
     nm <- featdef$name[i]; ty <- featdef$type[i]
     if(!(nm %in% colnames(meta)) || nm %in% covs) next
+    omics.only <- nm %in% pred.cols                  # predictor rule: omics donors only
 
     if(ty == "categorical"){
       v <- as.character(meta[[nm]]); ok <- !is.na(v) & v != "" & v != "NA"
+      if(omics.only) ok <- ok & meta$source == "omics"
       if(sum(ok) < 10) next
       tab <- table(meta$.grp[ok], v[ok])
       if(nrow(tab) < 2 || ncol(tab) < 2 || any(rowSums(tab) == 0)) next
@@ -2569,6 +2575,7 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
         n_A = sum(meta$.grp[ok] == "A"), n_B = sum(meta$.grp[ok] == "B"), stringsAsFactors = FALSE)
     } else {
       y <- suppressWarnings(as.numeric(meta[[nm]]))
+      if(omics.only) y[meta$source != "omics"] <- NA
       ok <- !is.na(y)
       yA <- y[ok & meta$.grp == "A"]; yB <- y[ok & meta$.grp == "B"]
       mA <- if(length(yA)) mean(yA) else NA_real_; mB <- if(length(yB)) mean(yB) else NA_real_
@@ -2668,7 +2675,7 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
 
   states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE)
@@ -2739,7 +2746,8 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
                     P_value = signif(res$P.Value, 3), Adjusted_p = signif(res$adj.P.Val, 3),
                     stringsAsFactors = FALSE)
   thr <- if(fdr == "true") out$Adjusted_p else out$P_value
-  out$sig <- ifelse(thr < pvalThresh & out$log2FC > 0, "up", ifelse(thr < pvalThresh & out$log2FC < 0, "down", "NS"))
+  hit <- !is.na(thr) & thr < pvalThresh & !is.na(out$log2FC)   # a feature limma could not estimate (NA) counts as NS
+  out$sig <- ifelse(hit & out$log2FC > 0, "up", ifelse(hit & out$log2FC < 0, "down", "NS"))
   write.csv(out, "endotype_omics_de.csv", row.names = FALSE)
   paste0("RES-OK;", sum(thr < pvalThresh, na.rm = TRUE), ";", sum(out$sig == "up"), ";", sum(out$sig == "down"), ";", nrow(out))
 }
@@ -2755,7 +2763,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   library(limma)
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
   cl <- suppressWarnings(as.integer(clusterNum)); if(is.na(cl)) return("RES-NO; bad cluster")
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
   states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
 
@@ -2821,7 +2829,8 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   out <- data.frame(Feature = rownames(res), log2FC = round(res$logFC, 4), AveExpr = round(res$AveExpr, 4),
                     t = round(res$t, 3), P_value = signif(res$P.Value, 3), Adjusted_p = signif(res$adj.P.Val, 3), stringsAsFactors = FALSE)
   thr <- if(fdr == "true") out$Adjusted_p else out$P_value
-  out$sig <- ifelse(thr < pvalThresh & out$log2FC > 0, "up", ifelse(thr < pvalThresh & out$log2FC < 0, "down", "NS"))
+  hit <- !is.na(thr) & thr < pvalThresh & !is.na(out$log2FC)   # a feature limma could not estimate (NA) counts as NS
+  out$sig <- ifelse(hit & out$log2FC > 0, "up", ifelse(hit & out$log2FC < 0, "down", "NS"))
   write.csv(out, "endotype_omics_de.csv", row.names = FALSE)
   paste0("RES-OK;", sum(thr < pvalThresh, na.rm = TRUE), ";", sum(out$sig == "up"), ";", sum(out$sig == "down"), ";", nrow(out))
 }
@@ -2842,7 +2851,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
                                  sourceFilter = "all") {
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
 
   states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE)
@@ -2944,7 +2953,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
 ## active contrast (states / within-state split) since it already holds the donor metadata.
 endotypeOmicsFeature <- function(omicsType, feature) {
   mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
   states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
   donor_cols <- intersect(colnames(mat), states$donor_id)
@@ -2974,7 +2983,7 @@ endotypeOmicsFeature <- function(omicsType, feature) {
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
   cl <- suppressWarnings(as.integer(clusterNum)); if(is.na(cl)) return("RES-NO; bad cluster")
-  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/")
+  deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
   states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
 

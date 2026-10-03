@@ -14,7 +14,8 @@
 #               only the gene layers, a metabolite only the metabolite layers, etc.:
 #                 gene        rnaseq | protein | nanostring | pbrna_alpha | pbrna_beta
 #                 metabolite  metabolite_hg | metabolite_lg | metabolite_ratio
-#                 contaminant contaminant
+#                 contaminant contaminant  (= TWO layers, adipose + pancreas, LOD-corrected rows,
+#                             reported as "Environmental contaminants (adipose|pancreas)")
 #                 flux        flux_hg | flux_lg | flux_ratio   (supported, NOT default)
 #               "all" on a TARGETED query = that feature's own layers (resolver-driven);
 #               "all" on a SCREEN = the GENE layers -- name a layer to screen a metabolite /
@@ -48,7 +49,8 @@
 # kgAssoc always COMPUTES the requested spec. all-features x all-phenotypes recompute is
 # refused (RES-USE-PRECOMPUTE) unless narrowed, because that IS the precompute.
 #
-# Writes kg_assoc.csv (one row per feature x phenotype x layer). Returns "RES-OK;<n_rows>"
+# Writes kg_assoc.csv (one row per feature x phenotype x layer) and kg_assoc_layers.csv (one row per layer x
+# phenotype the engines reached: donors, usable donors, tested | too_few_donors). Returns "RES-OK;<n_rows>"
 #   | "RES-USE-PRECOMPUTE" | "RES-NO" | "RES-NO-DB" | "RES-NO-META" | "RES-NO-PHENO"
 #   | "RES-NO-FEATURE" | "RES-NO-RESOLVE" | "RES-NO-RESOLVER".
 # ==============================================================================
@@ -90,6 +92,11 @@
 .kgMetaboliteLayerKeys  <- c("metabolite_hg","metabolite_lg","metabolite_ratio")
 .kgContaminantLayerKeys <- c("contaminant")
 .kgFluxLayerKeys        <- c("flux_hg","flux_lg","flux_ratio")
+
+# ⚠ THE CONTAMINANT KEY IS TWO LAYERS -- ONE PER TISSUE (user 2026-10-01, "yes, go ahead"). MEASURED on F11 "What about
+# in female donors?": 59 rows labelled `contaminant` = 57 chemicals' ADIPOSE values + the 2 measured only in pancreas,
+# pancreas never tested for the rest. The key the callers send stays `contaminant`; it fans out below into both
+# tissues (`.kgContaminantTissues` / `.kgTissueLayers`, kg_common.R -- shared with every other kg function).
 .kgAllLayerKeys <- c(.kgGeneLayerKeys, .kgMetaboliteLayerKeys,
                      .kgContaminantLayerKeys, .kgFluxLayerKeys)
 
@@ -228,6 +235,23 @@
 
   con <- dbConnect(SQLite(), db.path); on.exit(dbDisconnect(con), add = TRUE)
   rows <- list()
+  # ⚠ A LAYER SKIPPED FOR TOO FEW DONORS WAS SILENT (user 2026-10-01, "yes, go ahead"). Both engines `next` past a
+  # layer whose donors (layer x subset) fall below `minN`, and nothing said so -- MEASURED on F4 "Which beta-cell genes
+  # … Tamil Sri Lankan, in female donors only?": 6 female donors carry beta-cell data, no beta row came back, and the
+  # answer called it "a MEASURED null, not an absence of data". Every layer an engine reaches is recorded here with its
+  # donor count and, per phenotype, the donors that also carry a value; written to `kg_assoc_layers.csv` beside
+  # `kg_assoc.csv`. Status `too_few_donors` = skipped at the `minN` gate, `tested` = went to the fit.
+  lstat <- list()
+  .note_layer <- function(disp, dc){
+    for(ph in phenos){
+      v <- phframe[intersect(dc, rownames(phframe)), ph]
+      lstat[[length(lstat)+1]] <<- data.frame(
+        Layer = disp, Phenotype = ph, N_layer = length(dc),
+        N_usable = sum(!is.na(v) & !(as.character(v) %in% c("", "NA"))), MinN = minN,
+        Status = if(length(dc) < minN) "too_few_donors" else "tested", Subset = subset_note,
+        stringsAsFactors = FALSE)
+    }
+  }
   # ⚠ ONE CLASS IS A DATA CONDITION, NOT A CRASH. A donor subset can leave a discrete phenotype with
   # a single level ("type 1 diabetes vs pancreatitis, in lean donors only"), and limma then dies
   # inside model.matrix with "contrasts can be applied only to factors with 2 or more levels".
@@ -265,8 +289,11 @@
         # entity-driven + supported-only: the resolver hands back this feature's OWN layers,
         # and anything out of scope (pbrna_delta/pbrna_pp/flux) is dropped here.
         if(!(lk %in% .kgAllLayerKeys)) next
-        if(!is.null(lay_filter) && !(lk %in% lay_filter || tolower(la$display) %in% lay_filter)) next
-        feats[[length(feats)+1]] <- list(token = tk, etype = r$type, layer = la)
+        # the resolver's one contaminant layer -> one layer per tissue (`.kgTissueLayers`, kg_common.R)
+        for(la2 in .kgTissueLayers(la)){
+          if(!is.null(lay_filter) && !(lk %in% lay_filter || .kgDisplayIn(la2, lay_filter))) next
+          feats[[length(feats)+1]] <- list(token = tk, etype = r$type, layer = la2)
+        }
       }
     }
     if(length(feats) == 0) return("RES-NO-RESOLVE")
@@ -283,8 +310,10 @@
     for(k in unique(key)){
       idx <- which(key == k); la <- feats[[idx[1]]]$layer
       read_vals <- unique(vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1)))
-      FR <- .kgFeatureRows(con, la$table, la$read_col, read_vals); if(is.null(FR)) next
-      dcommon <- intersect(colnames(FR$mat), keep_ids); if(length(dcommon) < minN) next
+      FR <- .kgFeatureRows(con, la$table, la$read_col, read_vals, la$rowfilter); if(is.null(FR)) next
+      dcommon <- intersect(colnames(FR$mat), keep_ids)
+      .note_layer(la$display, dcommon)
+      if(length(dcommon) < minN) next
 
       # small-n entities (metabolite/contaminant) drop the DEFAULT covariates; an explicit
       # user list is always honored. Entity is a property of the layer, so this is per-layer.
@@ -342,6 +371,13 @@
       lays <- if(identical(layers, "all")) .kgGeneLayerKeys else tolower(trimws(strsplit(layers, "[,;]")[[1]]))
       for(ln in lays){
         lp <- .kgScreenLayer(ln); if(is.null(lp)) next
+        if(identical(tolower(ln), "contaminant")){
+          # one work item per tissue (`.kgContaminantTissues`); `mkey` keeps the KEY for the method choice
+          for(ct in .kgContaminantTissues)
+            work[[length(work)+1]] <- list(disp = ct$label, tbl = lp[1], id = lp[2], keep = NULL,
+                                           ent = "contaminant", mkey = "contaminant", rowfilter = ct$rowfilter)
+          next
+        }
         work[[length(work)+1]] <- list(disp = ln, tbl = lp[1], id = lp[2], keep = NULL,
                                        ent = .kgLayerEntity(tolower(ln)))
       }
@@ -352,16 +388,18 @@
         work[[length(work)+1]] <- list(
           disp = la$display, tbl = la$table, id = la$read_col,
           keep = unique(vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1))),
-          ent  = feats[[idx[1]]]$etype)
+          ent  = feats[[idx[1]]]$etype, mkey = .kgLayerKey(la$display), rowfilter = la$rowfilter)
       }
     }
     for(w in work){
-      L <- .kgLoadLayerMatrix(con, w$tbl, w$id); if(is.null(L)) next
-      dcommon <- intersect(colnames(L$mat), keep_ids); if(length(dcommon) < minN) next
+      L <- .kgLoadLayerMatrix(con, w$tbl, w$id, w$rowfilter); if(is.null(L)) next
+      dcommon <- intersect(colnames(L$mat), keep_ids)
+      .note_layer(w$disp, dcommon)
+      if(length(dcommon) < minN) next
       Lmat <- L$mat[, dcommon, drop = FALSE]
       ent   <- w$ent
       small <- identical(covariates, "default") && (ent %in% .kgSmallNTypes)
-      meth <- .kgAssocMethod(method, w$disp, is_screen)
+      meth <- .kgAssocMethod(method, if(!is.null(w$mkey)) w$mkey else w$disp, is_screen)
       for(ph in phenos){
         pt  <- .kgPhenoType(m, ph)
         cvn <- if(small) character(0) else covcols_for(ph)
@@ -410,6 +448,13 @@
       }
     }
   }
+
+  # the per-layer status (see `.note_layer`), written on EVERY return from here on -- RES-OK and the empty ones alike
+  utils::write.csv(if(length(lstat)) do.call(rbind, lstat) else
+                     data.frame(Layer = character(0), Phenotype = character(0), N_layer = integer(0),
+                                N_usable = integer(0), MinN = integer(0), Status = character(0),
+                                Subset = character(0)),
+                   "kg_assoc_layers.csv", row.names = FALSE)
 
   # ⚠ "NOTHING TO COMPARE" IS NOT "COMPARED AND FOUND NOTHING". A bare RES-NO means the test RAN and
   # came back empty, which IS an answer; RES-ONE-CLASS means it could not run at all. Merging them

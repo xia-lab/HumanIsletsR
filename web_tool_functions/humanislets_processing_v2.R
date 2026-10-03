@@ -7,6 +7,8 @@
 #   * metadata_sum_norm / _raw are built IN MEMORY and each written ONCE
 #     (no write-then-read-back-then-rewrite).
 #   * Every output file is written exactly once.
+#   * Donor clusters: final_cluster = the OLD clusters "C0".."C4" (states.path, kept unchanged);
+#     cluster_v2 = the frozen v2 clusters "G0".."G3", omics donors only (states_v2.path).
 #
 # NOT YET RUN against live REDCap. Diff the outputs against the current
 # display_data/*.csv before deploying.
@@ -16,9 +18,19 @@
 other.tables.path <- "/Users/lzy/humanislet/humanislets/"
 sqlite.path ="/Users/lzy/humanislet/sqlite/"
 alice.path   = "/Users/lzy/humanislet/ocr_calculations_2026-04-02.csv"
-states.path  = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/donor_states.csv"
+states.path  = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_protv2_wronglabel/endotype_deliverable_FINAL/donor_states.csv"
+states_v2.path = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_v2/cluster_live_v2/donor_states.csv"
 demo.path    = "/Users/lzy/humanislet/humanislets/updated_data/ADIIsletCoreHumanIsl-AgeSexBMIHbA1CDiabet_DATA_2026-08-01_2009.csv"
 ## ---- helpers ----------------------------------------------------------------
+
+# Cluster label per record_id from a donor_states.csv (donor_id, cluster, source): prefix + cluster id, NA = no
+# cluster. omics_only = TRUE keeps only omics donors (v2: a predicted cluster is never stored as a phenotype).
+cluster_labels <- function(ids, path, prefix, omics_only = FALSE) {
+  st <- read.csv(path, stringsAsFactors = FALSE)
+  if (omics_only) st <- st[st$source == "omics", ]
+  cl <- st$cluster[match(ids, st$donor_id)]
+  ifelse(is.na(cl), NA, paste0(prefix, cl))
+}
 
 # Wide seahorse csv (variables in rows, "R###_<rep>" columns) -> tidy per-sample.
 read_seahorse_wide <- function(path) {
@@ -148,7 +160,8 @@ redcap_export_fun <- function(api_token,
                               other.tables.path,
                               sqlite.path ="/Users/lzy/humanislet/sqlite/",
                               alice.path   = "/Users/lzy/humanislet/ocr_calculations_2026-04-02.csv",
-                              states.path  = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_protv2/endotype_deliverable_FINAL/donor_states.csv",
+                              states.path  = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_protv2_wronglabel/endotype_deliverable_FINAL/donor_states.csv",
+                              states_v2.path = "/Users/lzy/humanislet/humanislets/donor_clustering_pipeline_v2/cluster_live_v2/donor_states.csv",
                               demo.path    = "/Users/lzy/humanislet/humanislets/updated_data/ADIIsletCoreHumanIsl-AgeSexBMIHbA1CDiabet_DATA_2026-08-01_2009.csv") {
 
   library(RSQLite); library(dplyr); library(data.table)
@@ -565,6 +578,8 @@ redcap_export_fun <- function(api_token,
   # ensure the 3 Alice-only calc_ columns are present even if not in raw_variable_summary
   for (c in setdiff(MITO_COLS, colnames(metadata_norm)))
     metadata_norm[[c]] <- mito_norm[[c]][match(metadata_norm$record_id, mito_norm$record_id)]
+  metadata_norm$final_cluster <- cluster_labels(metadata_norm$record_id, states.path, "C")
+  metadata_norm$cluster_v2    <- cluster_labels(metadata_norm$record_id, states_v2.path, "G", omics_only = TRUE)
   wcsv(metadata_norm, "metadata_sum_norm.csv")
 
   metadata_raw <- join_ephys(varValues_raw, ephys.dt)
@@ -572,11 +587,13 @@ redcap_export_fun <- function(api_token,
   metadata_raw <- set_cols(metadata_raw, function_summary, intersect(fs_cols,  colnames(metadata_raw)))
   for (c in setdiff(MITO_COLS, colnames(metadata_raw)))
     metadata_raw[[c]] <- mito_out[[c]][match(metadata_raw$record_id, mito_out$record_id)]
+  metadata_raw$final_cluster <- cluster_labels(metadata_raw$record_id, states.path, "C")
+  metadata_raw$cluster_v2    <- cluster_labels(metadata_raw$record_id, states_v2.path, "G", omics_only = TRUE)
   wcsv(metadata_raw, "metadata_sum_raw.csv")
 
   ## ---- 9. Spearman correlation ----------------------------------------------
   library(Hmisc)
-  df_clean <- metadata_norm[, -1]
+  df_clean <- metadata_norm[, setdiff(colnames(metadata_norm), c("record_id", "final_cluster", "cluster_v2"))]   # cluster ids are labels, not values
   df_clean[] <- lapply(df_clean, function(x) if (is.character(x) || is.factor(x)) as.numeric(factor(x)) else x)
   df_clean <- df_clean[, colSums(!is.na(df_clean)) >= 6]
   rc <- rcorr(as.matrix(df_clean), type = "spearman")
@@ -596,20 +613,22 @@ redcap_export_fun <- function(api_token,
   tables$seahorse_outcome <- mito_out
   tables$raw_variable_summary <- raw_variable_summary
   # proc_metadata = normalized metadata + donor-state label (final_cluster) from the
-  # endotype deliverable's `cluster` column, matched by donor_id. This is the ONLY
-  # place final_cluster is attached (the metadata_sum_*.csv files never carry it).
+  # endotype deliverable's `cluster` column, matched by donor_id. The metadata_sum_*.csv
+  # files carry final_cluster and cluster_v2 too (step 8), as the files in use do.
   donor_states <- read.csv(states.path)
   proc_metadata <- metadata_norm
   # the interface expects final_cluster as "C0".."C4" (atlas/kg-search filter on that);
   # donor_states$cluster is 0..4, so prefix "C". NA stays NA (donors with no cluster).
   cl <- donor_states$cluster[match(proc_metadata$record_id, donor_states$donor_id)]
   proc_metadata$final_cluster <- ifelse(is.na(cl), NA, paste0("C", cl))
+  proc_metadata$cluster_v2 <- cluster_labels(proc_metadata$record_id, states_v2.path, "G", omics_only = TRUE)
   tables$proc_metadata <- proc_metadata
 
   # also carry final_cluster on the donor table (the old pipeline had it there, and the
   # interface may read the label from `donor`). Same 0..4 -> "C0".."C4" mapping.
   cld <- donor_states$cluster[match(tables$donor$record_id, donor_states$donor_id)]
   tables$donor$final_cluster <- ifelse(is.na(cld), NA, paste0("C", cld))
+  tables$donor$cluster_v2 <- cluster_labels(tables$donor$record_id, states_v2.path, "G", omics_only = TRUE)
 
   sqlite.tables <- c("computed","donor","ephys_cell","ephys_donor","gsis","isolation",
                      "proc_metadata","proc_variable_summary","raw_variable_summary",

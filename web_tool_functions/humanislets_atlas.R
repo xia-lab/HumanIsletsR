@@ -170,9 +170,9 @@ getAtlasLayer <- function(omicsType, layerType, donorId, condition, analysisVar,
 
     library(limma)
 
-    # donorId holds the cluster name (e.g. "C0")
+    # donorId holds the v2 cluster id (e.g. "C1" = Cluster 1)
     cluster_id <- donorId
-    cluster_donors <- pheno$record_id[pheno$final_cluster == cluster_id]
+    cluster_donors <- pheno$record_id[!is.na(pheno$cluster_v2) & pheno$cluster_v2 == cluster_id]
     cluster_donors <- intersect(cluster_donors, colnames(feature_table))
 
     if (length(cluster_donors) < 3) {

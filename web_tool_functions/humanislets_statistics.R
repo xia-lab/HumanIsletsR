@@ -2343,7 +2343,8 @@ PatchseqSpearman <- function(
   mydb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   metadata <- dbReadTable(mydb, "ephys_cell")
   dbDisconnect(mydb)
-  
+  metadata <- metadata[grepl("^R", metadata$record_id), ]  # R donors only (no HPAP cells)
+
   # filter to keep only data with complete metadata & omics data
   metadata <- metadata[metadata$cell_id %in% colnames(feature_table), c("cell_id", "record_id", analysisVar)]
   metadata <- na.omit(metadata)
@@ -2481,37 +2482,46 @@ convert_gpr_to_r <- function(rule, present_genes) {
    list(map=any(expr$map),expr=expr)
  }
 
+## donor_cluster.csv (cluster_live_v2): one row per donor -- cluster C1-C4, source (omics / predicted), reliability,
+## probabilities, assignment stability, direction scores. cluster_num = 1-4 (Cluster 1-4), the numbers the pages send.
+.donor_cluster_table <- function(deliv) {
+  x <- read.csv(paste0(deliv, "donor_cluster.csv"), stringsAsFactors = FALSE)
+  x$donor_id <- as.character(x$donor_id)
+  x$cluster_num <- as.integer(sub("^C", "", x$cluster))
+  x
+}
+
 ## ============================================================================
-## compareEndotypeStates -- Donor State Explorer "advanced comparison" web tool function.
+## compareClusterPhenotypes -- Donor Cluster Explorer "advanced comparison" web tool function.
 ## Uses the SAME default phenotype statistic as the in-page enrichment table:
 ##   numeric phenotype, NO covariate    -> Welch two-sample t-test (group A vs group B)
 ##   numeric phenotype, WITH covariate  -> lm(value ~ group + covariates); report group term
 ##   categorical phenotype              -> chi-square (Cramer's V effect size)
 ## BH-FDR across phenotypes. Inputs read by RELATIVE path via setPaths() (other.tables.path).
-## DISTINCT file names (endotype_compare_*) + qs so it never clashes with the omics DEA
+## DISTINCT file names (cluster_compare_*) + qs so it never clashes with the omics DEA
 ## (donors.rds / dea_results.csv). Result written to the user folder; returns RES-OK;sig;up;down;n.
-##   groupA, groupB : semicolon-separated state numbers, e.g. "4" vs "1;2;3;5"
+##   groupA, groupB : semicolon-separated cluster numbers (1-4), e.g. "4" vs "1;2;3"
 ##   covariates     : semicolon-separated phenotype column names ("" = none -> Welch)
 ##   subsetKey      : "" = all donors; else reads donors_<subsetKey>.rds written by the app-filter phenotype filter
-##   sourceFilter   : "all" | "omics" | "predicted"
+##   sourceFilter   : "omics" | "predicted" | "pred_high" | "pred_high_med"; anything else ("pred_all") = all donors
 ## Predictor rule (v2 clusters): phenotypes listed in predictor_phenotypes.csv (the assays the cluster prediction used)
 ## are compared in omics donors only, never in predicted donors, whose cluster was predicted from those values.
 ## ============================================================================
-compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "",
+compareClusterPhenotypes <- function(groupA, groupB, covariates = "", subsetKey = "",
                                   sourceFilter = "all", fdr = "true", pvalThresh = "0.05") {
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
   pheno_file <- paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv")
-  if(!file.exists(paste0(deliv, "donor_states.csv")) || !file.exists(pheno_file)){
+  if(!file.exists(paste0(deliv, "donor_cluster.csv")) || !file.exists(pheno_file)){
     return("RES-NO; required input tables not found")
   }
 
-  states  <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE)
+  clusters  <- .donor_cluster_table(deliv)
   featdef <- read.csv(paste0(deliv, "compare_features.csv"), stringsAsFactors = FALSE)
   pheno   <- read.csv(pheno_file, stringsAsFactors = FALSE, check.names = FALSE)
-  states$donor_id <- as.character(states$donor_id)
+  clusters$donor_id <- as.character(clusters$donor_id)
   pheno$sample_id <- as.character(pheno$sample_id)
-  meta <- merge(states, pheno, by.x = "donor_id", by.y = "sample_id")
+  meta <- merge(clusters[, c("donor_id","cluster_num","source","reliability")], pheno, by.x = "donor_id", by.y = "sample_id")
   pfile <- paste0(deliv, "predictor_phenotypes.csv")
   pred.cols <- if(file.exists(pfile)) as.character(read.csv(pfile, stringsAsFactors = FALSE)$phenotype_column) else character(0)
 
@@ -2533,7 +2543,7 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
 
   gA <- suppressWarnings(as.integer(strsplit(groupA, ";")[[1]]))
   gB <- suppressWarnings(as.integer(strsplit(groupB, ";")[[1]]))
-  grp <- ifelse(meta$state_num %in% gA, "A", ifelse(meta$state_num %in% gB, "B", NA))
+  grp <- ifelse(meta$cluster_num %in% gA, "A", ifelse(meta$cluster_num %in% gB, "B", NA))
   meta <- meta[!is.na(grp), , drop = FALSE]; grp <- grp[!is.na(grp)]
   if(sum(grp == "A") < 3 || sum(grp == "B") < 3) return("RES-NO; fewer than 3 donors per group")
   meta$.grp <- factor(grp, levels = c("B", "A"))   # B = reference; coefficient / diff = A - B
@@ -2626,25 +2636,25 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
   res <- res[order(res$P_value), ]
   res <- res[, c("Feature","Type","Method","Effect","Mean_A","Mean_B","Statistic","P_value","Adjusted_p","n_A","n_B","sig")]
 
-  write.csv(res, "endotype_compare_result.csv", row.names = FALSE)
+  write.csv(res, "cluster_compare_result.csv", row.names = FALSE)
   paste0("RES-OK;", sig.num, ";", sig.up, ";", sig.down, ";", nrow(res))
 }
 
 ## ============================================================================
-## compareEndotypeOmics -- Donor State Explorer omics differential expression (limma).
+## compareClusterOmics -- Donor Cluster Explorer omics differential expression (limma).
 ## Reads the normalized omics matrix directly (processed_comprehensive/omics/), groups
-## donors by endotype state (Group A vs Group B), runs limma with optional covariate
-## adjustment, writes endotype_omics_de.csv to the user folder. DISTINCT names from the
+## donors by cluster (Group A vs Group B), runs limma with optional covariate
+## adjustment, writes cluster_omics_de.csv to the user folder. DISTINCT names from the
 ## omics view's DonorRegression (dea_results.csv) -- no clash. Inputs read by relative path.
 ##   omicsType  : proc_rnaseq | proc_prot_v2 | proc_nanostring | proc_methylation |
 ##                proc_pbrna_alpha | proc_pbrna_beta | proc_metabolite | proc_flux
-##   groupA/B   : ";"-joined state numbers ; covariates : ";"-joined phenotype names
+##   groupA/B   : ";"-joined cluster numbers ; covariates : ";"-joined phenotype names
 ##   subsetKey  : "" or donors_<subsetKey>.rds (app-filter) ; sourceFilter : page donor-set tier
 ## ============================================================================
-## Map an endotype omicsType to its source SQLite DB + table. ALL omics are read from SQLite
+## Map a cluster-page omicsType to its source SQLite DB + table. ALL omics are read from SQLite
 ## (the canonical source, matching the Omics page): proteomics -> ComBat table proc_prot_combat,
 ## metabolites -> ComBat tables proc_metabolite_combat_{LG|HG|ratio}, methylation -> the methylation DB.
-.endotype_sqlite_tbl <- function(omicsType) switch(omicsType,
+.cluster_sqlite_tbl <- function(omicsType) switch(omicsType,
     proc_rnaseq           = list(db = "HI_omics_v2.sqlite",    tbl = "proc_rnaseq"),
     proc_prot_v2          = list(db = "HI_omics_v2.sqlite",    tbl = "proc_prot_combat"),
     proc_nanostring       = list(db = "HI_omics_v2.sqlite",    tbl = "proc_nanostring_merge"),
@@ -2657,11 +2667,11 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
     proc_metabolite_ratio = list(db = "HI_omics_v2.sqlite",    tbl = "proc_metabolite_combat_ratio"),
     NULL)
 
-## Read the endotype omics feature matrix (info cols + donor cols) as a data.frame, OR a
+## Read the cluster-page omics feature matrix (info cols + donor cols) as a data.frame, OR a
 ## "RES-NO; ..." string on failure. Every omics is read from its SQLite table (proteomics +
-## metabolites = ComBat-corrected); donor columns are record_ids that match donor_states.
-.endotype_read_omics <- function(omicsType) {
-  m <- .endotype_sqlite_tbl(omicsType)
+## metabolites = ComBat-corrected); donor columns are record_ids that match donor_cluster.csv.
+.cluster_read_omics <- function(omicsType) {
+  m <- .cluster_sqlite_tbl(omicsType)
   if(is.null(m)) return("RES-NO; unknown omics type")
   if(!requireNamespace("RSQLite", quietly = TRUE)) return("RES-NO; RSQLite not installed")
   library(DBI)
@@ -2670,20 +2680,20 @@ compareEndotypeStates <- function(groupA, groupB, covariates = "", subsetKey = "
   dbReadTable(db, m$tbl)
 }
 
-compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
+compareClusterOmics <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
                                  sourceFilter = "all", fdr = "true", pvalThresh = "0.05") {
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
-  if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
+  if(!file.exists(paste0(deliv, "donor_cluster.csv"))) return("RES-NO; required files not found")
 
-  states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE)
-  states$donor_id <- as.character(states$donor_id)
+  clusters <- .donor_cluster_table(deliv)
+  clusters$donor_id <- as.character(clusters$donor_id)
 
   # omics matrix (features x donors); metabolites = ComBat SQLite, else CSV
-  mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
-  donor_cols <- intersect(colnames(mat), states$donor_id)
+  mat <- .cluster_read_omics(omicsType); if(is.character(mat)) return(mat)
+  donor_cols <- intersect(colnames(mat), clusters$donor_id)
   if(length(donor_cols) < 10) return("RES-NO; fewer than 10 donors have this omics type")
   info_cols <- setdiff(colnames(mat), donor_cols)
   symcol <- intersect(c("symbol","Symbol","gene_name","hgnc_symbol","gene","name"), info_cols)
@@ -2693,9 +2703,9 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
   expr <- as.matrix(mat[, donor_cols, drop = FALSE]); rownames(expr) <- make.unique(fid)
   storage.mode(expr) <- "double"
 
-  # metadata: state + (optional) covariates
+  # metadata: cluster + (optional) covariates
   meta <- merge(data.frame(donor_id = donor_cols, stringsAsFactors = FALSE),
-                states[, c("donor_id","state_num","source","reliability")], by = "donor_id")
+                clusters[, c("donor_id","cluster_num","source","reliability")], by = "donor_id")
   covs <- if(nzchar(covariates)) strsplit(covariates, ";")[[1]] else character(0)
   if(length(covs)){
     pheno <- read.csv(paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv"),
@@ -2716,7 +2726,7 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
 
   gA <- suppressWarnings(as.integer(strsplit(groupA, ";")[[1]]))
   gB <- suppressWarnings(as.integer(strsplit(groupB, ";")[[1]]))
-  grp <- ifelse(meta$state_num %in% gA, "A", ifelse(meta$state_num %in% gB, "B", NA))
+  grp <- ifelse(meta$cluster_num %in% gA, "A", ifelse(meta$cluster_num %in% gB, "B", NA))
   meta <- meta[!is.na(grp), , drop = FALSE]; grp <- grp[!is.na(grp)]
   meta$.grp <- factor(grp, levels = c("B","A"))   # B reference; coef .grpA = A - B (log2FC)
 
@@ -2748,14 +2758,14 @@ compareEndotypeOmics <- function(omicsType, groupA, groupB, covariates = "", sub
   thr <- if(fdr == "true") out$Adjusted_p else out$P_value
   hit <- !is.na(thr) & thr < pvalThresh & !is.na(out$log2FC)   # a feature limma could not estimate (NA) counts as NS
   out$sig <- ifelse(hit & out$log2FC > 0, "up", ifelse(hit & out$log2FC < 0, "down", "NS"))
-  write.csv(out, "endotype_omics_de.csv", row.names = FALSE)
+  write.csv(out, "cluster_omics_de.csv", row.names = FALSE)
   paste0("RES-OK;", sum(thr < pvalThresh, na.rm = TRUE), ";", sum(out$sig == "up"), ";", sum(out$sig == "down"), ";", nrow(out))
 }
 
-## Within-cluster omics: split ONE state's donors by a phenotype variable, then limma.
+## Within-cluster omics: split ONE cluster's donors by a phenotype variable, then limma.
 ##   splitMode = "num" -> design ~ continuous splitVar (slope per feature = linear association)
 ##   splitMode = "cat" -> design ~ group (groupA categories vs groupB categories)
-## Writes endotype_omics_de.csv (same schema as compareEndotypeOmics) so the frontend loads it unchanged.
+## Writes cluster_omics_de.csv (same schema as compareClusterOmics) so the frontend loads it unchanged.
 compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num",
                                groupA = "", groupB = "", sourceFilter = "all", fdr = "true", pvalThresh = "0.05",
                                covariates = "") {
@@ -2764,11 +2774,11 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   pvalThresh <- suppressWarnings(as.numeric(pvalThresh)); if(is.na(pvalThresh)) pvalThresh <- 0.05
   cl <- suppressWarnings(as.integer(clusterNum)); if(is.na(cl)) return("RES-NO; bad cluster")
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
-  if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
-  states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
+  if(!file.exists(paste0(deliv, "donor_cluster.csv"))) return("RES-NO; required files not found")
+  clusters <- .donor_cluster_table(deliv); clusters$donor_id <- as.character(clusters$donor_id)
 
-  mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
-  donor_cols <- intersect(colnames(mat), states$donor_id)
+  mat <- .cluster_read_omics(omicsType); if(is.character(mat)) return(mat)
+  donor_cols <- intersect(colnames(mat), clusters$donor_id)
   if(length(donor_cols) < 10) return("RES-NO; fewer than 10 donors have this omics type")
   info_cols <- setdiff(colnames(mat), donor_cols)
   symcol <- intersect(c("symbol","Symbol","gene_name","hgnc_symbol","gene","name"), info_cols)
@@ -2778,7 +2788,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   expr <- as.matrix(mat[, donor_cols, drop = FALSE]); rownames(expr) <- make.unique(fid); storage.mode(expr) <- "double"
 
   meta <- merge(data.frame(donor_id = donor_cols, stringsAsFactors = FALSE),
-                states[, c("donor_id","state_num","source","reliability")], by = "donor_id")
+                clusters[, c("donor_id","cluster_num","source","reliability")], by = "donor_id")
   pheno <- read.csv(paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv"),
                     stringsAsFactors = FALSE, check.names = FALSE); pheno$sample_id <- as.character(pheno$sample_id)
   if(!(splitVar %in% colnames(pheno))) return(paste0("RES-NO; split variable not found: ", splitVar))
@@ -2797,8 +2807,8 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   if(sourceFilter == "predicted")     meta <- meta[meta$source == "predicted", ]
   if(sourceFilter == "pred_high")     meta <- meta[meta$source == "omics" | (meta$source == "predicted" & meta$reliability == "high"), ]
   if(sourceFilter == "pred_high_med") meta <- meta[meta$source == "omics" | (meta$source == "predicted" & meta$reliability %in% c("high","medium")), ]
-  meta <- meta[meta$state_num == cl, , drop = FALSE]
-  if(nrow(meta) < 6) return("RES-NO; too few donors in this state for the selected donor set")
+  meta <- meta[meta$cluster_num == cl, , drop = FALSE]
+  if(nrow(meta) < 6) return("RES-NO; too few donors in this cluster for the selected donor set")
 
   covTerm <- if(length(covCols)) paste0(" + ", paste(covCols, collapse = " + ")) else ""
   if(splitMode == "cat"){
@@ -2831,34 +2841,34 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   thr <- if(fdr == "true") out$Adjusted_p else out$P_value
   hit <- !is.na(thr) & thr < pvalThresh & !is.na(out$log2FC)   # a feature limma could not estimate (NA) counts as NS
   out$sig <- ifelse(hit & out$log2FC > 0, "up", ifelse(hit & out$log2FC < 0, "down", "NS"))
-  write.csv(out, "endotype_omics_de.csv", row.names = FALSE)
+  write.csv(out, "cluster_omics_de.csv", row.names = FALSE)
   paste0("RES-OK;", sum(thr < pvalThresh, na.rm = TRUE), ";", sum(out$sig == "up"), ";", sum(out$sig == "down"), ";", nrow(out))
 }
 
 ## ============================================================================
-## endotypeOmicsPathway -- pathway enrichment for the Donor State Explorer.
+## clusterOmicsPathway -- pathway enrichment for the Donor Cluster Explorer.
 ## Reuses HumanIsletsR performGSEA (fgsea preranked, ranked by the limma t-statistic)
-## across one or more gene-set / metabolite-set libraries, on the SAME state-vs-group
-## contrast as compareEndotypeOmics. Genes -> kegg / reactome / go_mf (entrez Gene_ID);
-## metabolites -> hsa_kegg (KEGG compound sets). Writes endotype_omics_pathway.csv.
+## across one or more gene-set / metabolite-set libraries, on the SAME cluster-vs-group
+## contrast as compareClusterOmics. Genes -> kegg / reactome / go_mf (entrez Gene_ID);
+## metabolites -> hsa_kegg (KEGG compound sets). Writes cluster_omics_pathway.csv.
 ## No MetaboAnalystR -- HumanIsletsR machinery only.
 ##   libs : ";"-joined funcLib values (gene libraries; ignored for metabolites)
 ## ============================================================================
 
-## shared helper: run the endotype limma contrast and return a ranked data.frame
+## shared helper: run the cluster limma contrast and return a ranked data.frame
 ## carrying entrez Gene_ID + kegg_id annotation (or a "RES-NO; ..." string on failure).
-.endotypeOmicsRanked <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
+.clusterOmicsRanked <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
                                  sourceFilter = "all") {
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
-  if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
+  if(!file.exists(paste0(deliv, "donor_cluster.csv"))) return("RES-NO; required files not found")
 
-  states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE)
-  states$donor_id <- as.character(states$donor_id)
+  clusters <- .donor_cluster_table(deliv)
+  clusters$donor_id <- as.character(clusters$donor_id)
 
-  mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
-  donor_cols <- intersect(colnames(mat), states$donor_id)
+  mat <- .cluster_read_omics(omicsType); if(is.character(mat)) return(mat)
+  donor_cols <- intersect(colnames(mat), clusters$donor_id)
   if(length(donor_cols) < 10) return("RES-NO; fewer than 10 donors have this omics type")
   info_cols <- setdiff(colnames(mat), donor_cols)
   symcol <- intersect(c("symbol","Symbol","gene_name","hgnc_symbol","gene","name"), info_cols)
@@ -2877,7 +2887,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
                      stringsAsFactors = FALSE)
 
   meta <- merge(data.frame(donor_id = donor_cols, stringsAsFactors = FALSE),
-                states[, c("donor_id","state_num","source","reliability")], by = "donor_id")
+                clusters[, c("donor_id","cluster_num","source","reliability")], by = "donor_id")
   covs <- if(nzchar(covariates)) strsplit(covariates, ";")[[1]] else character(0)
   if(length(covs)){
     pheno <- read.csv(paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv"),
@@ -2898,7 +2908,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
 
   gA <- suppressWarnings(as.integer(strsplit(groupA, ";")[[1]]))
   gB <- suppressWarnings(as.integer(strsplit(groupB, ";")[[1]]))
-  grp <- ifelse(meta$state_num %in% gA, "A", ifelse(meta$state_num %in% gB, "B", NA))
+  grp <- ifelse(meta$cluster_num %in% gA, "A", ifelse(meta$cluster_num %in% gB, "B", NA))
   meta <- meta[!is.na(grp), , drop = FALSE]; grp <- grp[!is.na(grp)]
   meta$.grp <- factor(grp, levels = c("B","A"))
 
@@ -2933,7 +2943,7 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
 ## term = pathwayID -> readable name). Genes: kegg/reactome/go_mf .rds ($sets entrez + $term);
 ## metabolites: kegg_hsa_met.qs ($mset.list keyed by hsa IDs, $path.ids name<->id). Same libraries
 ## the Omics page (performGSEA) uses.
-.endotype_load_lib <- function(funcLib){
+.cluster_load_lib <- function(funcLib){
   lib.path <- paste0(other.tables.path, "libraries/")
   if(funcLib == "hsa_kegg"){
     lib  <- qs::qread(paste0(lib.path, "kegg_hsa_met.qs"))
@@ -2948,15 +2958,15 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   list(sets = rds$sets, term = setNames(rds$term, names(rds$sets)))
 }
 
-## Donor State Explorer: per-donor measured values for ONE omics feature (box plot).
-## Writes endotype_omics_feature.csv (donor_id, value); the frontend groups the donors by the
-## active contrast (states / within-state split) since it already holds the donor metadata.
-endotypeOmicsFeature <- function(omicsType, feature) {
-  mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
+## Donor Cluster Explorer: per-donor measured values for ONE omics feature (box plot).
+## Writes cluster_omics_feature.csv (donor_id, value); the frontend groups the donors by the
+## active contrast (clusters / within-cluster split) since it already holds the donor metadata.
+clusterOmicsFeature <- function(omicsType, feature) {
+  mat <- .cluster_read_omics(omicsType); if(is.character(mat)) return(mat)
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
-  if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
-  states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
-  donor_cols <- intersect(colnames(mat), states$donor_id)
+  if(!file.exists(paste0(deliv, "donor_cluster.csv"))) return("RES-NO; required files not found")
+  clusters <- .donor_cluster_table(deliv); clusters$donor_id <- as.character(clusters$donor_id)
+  donor_cols <- intersect(colnames(mat), clusters$donor_id)
   if(!length(donor_cols)) return("RES-NO; no donors have this omics type")
   info_cols <- setdiff(colnames(mat), donor_cols)
   symcol <- intersect(c("symbol","Symbol","gene_name","hgnc_symbol","gene","name"), info_cols)
@@ -2970,25 +2980,25 @@ endotypeOmicsFeature <- function(omicsType, feature) {
   out <- data.frame(donor_id = donor_cols, value = round(vals, 5), stringsAsFactors = FALSE)
   out <- out[!is.na(out$value), , drop = FALSE]
   if(!nrow(out)) return("RES-NO; no measured values for this feature")
-  write.csv(out, "endotype_omics_feature.csv", row.names = FALSE)
+  write.csv(out, "cluster_omics_feature.csv", row.names = FALSE)
   paste0("RES-OK;", nrow(out))
 }
 
-## within-state analog of .endotypeOmicsRanked: split ONE state's donors by a phenotype
+## within-cluster analog of .clusterOmicsRanked: split ONE cluster's donors by a phenotype
 ## variable (cat -> Group A vs B; num -> per-feature slope), optionally adjusting for numeric
 ## covariates, and return the SAME ranked data.frame (Feature, log2FC, T_statistic, Gene_ID,
-## kegg_id) so the pathway machinery can rank by T_statistic exactly as for the cross-state case.
-.endotypeWithinRanked <- function(omicsType, clusterNum, splitVar, splitMode = "num",
+## kegg_id) so the pathway machinery can rank by T_statistic exactly as for the cross-cluster case.
+.clusterWithinRanked <- function(omicsType, clusterNum, splitVar, splitMode = "num",
                                   groupA = "", groupB = "", sourceFilter = "all", covariates = "") {
   if(!requireNamespace("limma", quietly = TRUE)) return("RES-NO; limma not installed")
   library(limma)
   cl <- suppressWarnings(as.integer(clusterNum)); if(is.na(cl)) return("RES-NO; bad cluster")
   deliv <- paste0(other.tables.path, "donor_clustering_pipeline_v2/cluster_live_v2/")
-  if(!file.exists(paste0(deliv, "donor_states.csv"))) return("RES-NO; required files not found")
-  states <- read.csv(paste0(deliv, "donor_states.csv"), stringsAsFactors = FALSE); states$donor_id <- as.character(states$donor_id)
+  if(!file.exists(paste0(deliv, "donor_cluster.csv"))) return("RES-NO; required files not found")
+  clusters <- .donor_cluster_table(deliv); clusters$donor_id <- as.character(clusters$donor_id)
 
-  mat <- .endotype_read_omics(omicsType); if(is.character(mat)) return(mat)
-  donor_cols <- intersect(colnames(mat), states$donor_id)
+  mat <- .cluster_read_omics(omicsType); if(is.character(mat)) return(mat)
+  donor_cols <- intersect(colnames(mat), clusters$donor_id)
   if(length(donor_cols) < 10) return("RES-NO; fewer than 10 donors have this omics type")
   info_cols <- setdiff(colnames(mat), donor_cols)
   symcol <- intersect(c("symbol","Symbol","gene_name","hgnc_symbol","gene","name"), info_cols)
@@ -3006,7 +3016,7 @@ endotypeOmicsFeature <- function(omicsType, feature) {
                      stringsAsFactors = FALSE)
 
   meta <- merge(data.frame(donor_id = donor_cols, stringsAsFactors = FALSE),
-                states[, c("donor_id","state_num","source","reliability")], by = "donor_id")
+                clusters[, c("donor_id","cluster_num","source","reliability")], by = "donor_id")
   pheno <- read.csv(paste0(other.tables.path, "processed_comprehensive/phenotype/all_features.csv"),
                     stringsAsFactors = FALSE, check.names = FALSE); pheno$sample_id <- as.character(pheno$sample_id)
   if(!(splitVar %in% colnames(pheno))) return(paste0("RES-NO; split variable not found: ", splitVar))
@@ -3024,8 +3034,8 @@ endotypeOmicsFeature <- function(omicsType, feature) {
   if(sourceFilter == "predicted")     meta <- meta[meta$source == "predicted", ]
   if(sourceFilter == "pred_high")     meta <- meta[meta$source == "omics" | (meta$source == "predicted" & meta$reliability == "high"), ]
   if(sourceFilter == "pred_high_med") meta <- meta[meta$source == "omics" | (meta$source == "predicted" & meta$reliability %in% c("high","medium")), ]
-  meta <- meta[meta$state_num == cl, , drop = FALSE]
-  if(nrow(meta) < 6) return("RES-NO; too few donors in this state for the selected donor set")
+  meta <- meta[meta$cluster_num == cl, , drop = FALSE]
+  if(nrow(meta) < 6) return("RES-NO; too few donors in this cluster for the selected donor set")
 
   covTerm <- if(length(covCols)) paste0(" + ", paste(covCols, collapse = " + ")) else ""
   if(splitMode == "cat"){
@@ -3059,9 +3069,9 @@ endotypeOmicsFeature <- function(omicsType, feature) {
   out
 }
 
-## endotypeOmicsPathway: cross-state by default; when splitVar is supplied it instead enriches the
-## WITHIN-state contrast (one state split by splitVar), so pathway follows the same DE the table shows.
-endotypeOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
+## clusterOmicsPathway: cross-cluster by default; when splitVar is supplied it instead enriches the
+## WITHIN-cluster contrast (one cluster split by splitVar), so pathway follows the same DE the table shows.
+clusterOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", subsetKey = "",
                                  sourceFilter = "all", libs = "kegg;reactome;go_mf",
                                  fdr = "0.05", collapse = "true",
                                  clusterNum = "", splitVar = "", splitMode = "num") {
@@ -3071,8 +3081,8 @@ endotypeOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", sub
   gene_omics <- omicsType %in% c("proc_rnaseq","proc_prot_v2","proc_nanostring","proc_pbrna_alpha","proc_pbrna_beta")
   if(!is_metab && !gene_omics) return("RES-NO; pathway enrichment not available for this omics type")
 
-  r <- if(nzchar(splitVar)) .endotypeWithinRanked(omicsType, clusterNum, splitVar, splitMode, groupA, groupB, sourceFilter, covariates)
-       else .endotypeOmicsRanked(omicsType, groupA, groupB, covariates, subsetKey, sourceFilter)
+  r <- if(nzchar(splitVar)) .clusterWithinRanked(omicsType, clusterNum, splitVar, splitMode, groupA, groupB, sourceFilter, covariates)
+       else .clusterOmicsRanked(omicsType, groupA, groupB, covariates, subsetKey, sourceFilter)
   if(is.character(r)) return(r)
 
   # Build the preranked stats keyed by entrez (genes) / kegg_id (metabolites); map id -> display name.
@@ -3092,7 +3102,7 @@ endotypeOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", sub
 
   acc <- list()
   for(lib in lib_vec){
-    L <- tryCatch(.endotype_load_lib(lib), error = function(e) NULL)
+    L <- tryCatch(.cluster_load_lib(lib), error = function(e) NULL)
     if(is.null(L) || !length(L$sets)) next
     minSize <- if(lib == "hsa_kegg") 3 else 15
     fres <- tryCatch(fgsea(pathways = L$sets, stats = ranks, minSize = minSize, maxSize = 500),
@@ -3125,7 +3135,7 @@ endotypeOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", sub
   if(!length(acc)) return("RES-NO; no pathways enriched for this contrast")
   comb <- do.call(rbind, acc)
   comb <- comb[order(comb$P_value), ]
-  write.csv(comb, "endotype_omics_pathway.csv", row.names = FALSE)
+  write.csv(comb, "cluster_omics_pathway.csv", row.names = FALSE)
   paste0("RES-OK;", nrow(comb), ";", sum(comb$Adjusted_p < fdrn, na.rm = TRUE))
 }
  

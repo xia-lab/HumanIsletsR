@@ -473,7 +473,7 @@
   library(fgsea); .kgSetPaths()
   # ⚠ fgsea's p-values come from a permutation procedure, so WITHOUT A SEED the same question
   # on the same data returns slightly different numbers each run. Every deployed GSEA path
-  # seeds (performGSEA :20, endotypeOmicsPathway :2933). Same value, so kg and the web tool
+  # seeds (performGSEA :20, clusterOmicsPathway :2933). Same value, so kg and the web tool
   # agree run for run.
   set.seed(42)
   lib <- .kgLoadLibrary(library)

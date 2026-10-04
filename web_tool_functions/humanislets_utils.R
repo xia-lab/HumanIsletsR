@@ -260,7 +260,7 @@ if(version=="v2"){
 
                cluster = {
                 filt <- str_split(filter$cluster, ",")[[1]];
-                filt.list <- donor.table[(final_cluster %in% filt), record_id];
+                filt.list <- donor.table[(cluster_v2 %in% filt), record_id];   # the v2 clusters (C1-C4 = Cluster 1-4)
                 donors <- intersect(donors, filt.list);
                },
 
@@ -592,6 +592,7 @@ createHITables_fun <- function(tables, filetype = 'csv', version = 'v2'){
        }else {
         temp.nm <- outcome.tables[i]
         temp <- dbReadTable(con, outcome.tables[i])
+        temp <- temp[, names(temp) != "final_cluster", drop = FALSE]   # old v1 clusters not shipped: only cluster_v2
         temp <- temp[temp$record_id %in% donors, ]
         
         if(dim(temp)[1] > 0) {

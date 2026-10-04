@@ -226,7 +226,23 @@ datasetSummary_fun <- function(tables, version="v2"){
 
 ################################################################################
 
-metaplot_fun = function(meta, x.label, imgNm) {
+## Axis title of a plotted variable, looked up by its id (the page sends only the id): the site label table
+## proc_variable_summary_v2.csv (display: the raw-value label with units, as plotted here; else axis_title), then the
+## filter's meta_groups.csv, else the id itself.
+.metaplot_title <- function(meta) {
+  pick <- function(x) { x <- trimws(as.character(x)); x[!is.na(x) & nzchar(x)][1] }
+  vs <- tryCatch(read.csv(paste0(other.tables.path, "display_interface/proc_variable_summary_v2.csv"), stringsAsFactors = FALSE), error = function(e) NULL)
+  r <- if (is.null(vs)) NULL else vs[vs$column == meta, , drop = FALSE]
+  lab <- if (!is.null(r) && nrow(r)) pick(c(r$display[1], r$axis_title[1])) else NA
+  if (is.na(lab)) {
+    mg <- tryCatch(read.csv(paste0(other.tables.path, "display_interface/meta_groups.csv"), stringsAsFactors = FALSE), error = function(e) NULL)
+    r <- if (is.null(mg)) NULL else mg[mg$column == meta, , drop = FALSE]
+    lab <- if (!is.null(r) && nrow(r)) pick(r$display[1]) else NA
+  }
+  if (is.na(lab)) meta else lab
+}
+
+metaplot_fun = function(meta, x.label, imgNm) {   # x.label is not used: the title is looked up by id
   print(c(meta,x.label))
   require(RColorBrewer)
   require(RSQLite)
@@ -237,15 +253,6 @@ metaplot_fun = function(meta, x.label, imgNm) {
   # set file paths
   sqlite.path <- paste0(sqlite.path, "HI_tables.sqlite");
   
-  donor.meta <- c("donorage", "donorsex", "donationtype", "bodymassindex", "hba1c", "hla_a2", 
-                  "diagnosis", "other_condition", "percentieqrecoverypostculture", "pdisletparticleindex",
-                  "pdinsulinperieq", "pdinsulindnaratio", "predistributionculturetime");
-
-   grs.meta <- c("t1d_grs","t1d_drdq","t1d_class1","t1d_class2","t1d_nonhla",
-                   "t2d_grs","t2d_beta_cell","t2d_proins","t2d_obesity","t2d_lipodys", "t2d_liver_lipid")
-
- prohormone.meta <- c("avglgcp","avglgpi","lgcppiratio" ,"lgpicpratio","avghgcp","avghgpi","hgcppiratio","avghgcp","avglysatepi","lysatecppiratio", "lysatepicpratio")
-
   lipid.meta <- c("tc_weight_recovery", "tg_weight_recovery", "fc_weight_recovery", "ce")
 
   if (meta %in% lipid.meta) {
@@ -254,21 +261,11 @@ metaplot_fun = function(meta, x.label, imgNm) {
     dat <- data.frame(meta = all.info[[meta]], stringsAsFactors = FALSE)
     dat <- dat[!is.na(dat$meta), , drop = FALSE]
   } else {
-    if (meta %in% donor.meta) {
-      table.name <- "donor"
-    }else if (meta %in%  grs.meta){
-      table.name <- "grs"
-    }else if (meta %in%  prohormone.meta){
-      table.name <- "prohormone"
-    } else {
-      table.name <- "isolation"
-    }
-
-    query <- paste0('SELECT ', meta, ' FROM ', table.name)
-
-    # get data
+    # the table that holds this column (same order as the old fixed lists: donor, grs, prohormone, isolation)
     mydb <- dbConnect(RSQLite::SQLite(), sqlite.path)
-    dat <- dbGetQuery(mydb, query)
+    table.name <- Find(function(t) meta %in% dbListFields(mydb, t), c("donor", "grs", "prohormone", "isolation"))
+    if (is.null(table.name)) { dbDisconnect(mydb); return(paste0("RES-NO; unknown variable: ", meta)) }
+    dat <- dbGetQuery(mydb, paste0('SELECT ', meta, ' FROM ', table.name))
     dbDisconnect(mydb)
   }
   if(colnames(dat) %in% c("cryotubesremaining","sftubesremaining")){
@@ -276,7 +273,14 @@ metaplot_fun = function(meta, x.label, imgNm) {
    }else{
      colnames(dat) <- "meta"
    }
-  x.label <- gsub("\\.", " ", x.label)
+  if (meta == "cluster_v2") {   # v2 clusters (omics donors only): bars named as in display_interface/disc_groups.csv
+    dg <- read.csv(paste0(other.tables.path, "display_interface/disc_groups.csv"), stringsAsFactors = FALSE)
+    dg <- dg[dg$column == "cluster_v2", ]
+    dat <- dat[!is.na(dat$meta) & dat$meta != "", , drop = FALSE]
+    lab <- sub("^(Cluster [0-9]+) ", "\\1\n", dg$display)   # "Cluster N" over its name, so the names do not overlap
+    dat$meta <- factor(lab[match(dat$meta, dg$group)], levels = lab)
+  }
+  x.label <- .metaplot_title(meta)   # the page sends only the id; the axis title comes from the label tables
   
   # create ggplot plot object
   if( class(dat$meta) == "numeric" ) {

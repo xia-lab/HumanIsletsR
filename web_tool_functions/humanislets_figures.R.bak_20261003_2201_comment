@@ -228,7 +228,7 @@ datasetSummary_fun <- function(tables, version="v2"){
 
 ## Axis title of a plotted variable, looked up by its id (the page sends only the id): the site label table
 ## proc_variable_summary_v2.csv (display: the raw-value label with units, as plotted here; else axis_title), then the
-## Meta View label table meta_groups.csv, else the id itself.
+## filter's meta_groups.csv, else the id itself.
 .metaplot_title <- function(meta) {
   pick <- function(x) { x <- trimws(as.character(x)); x[!is.na(x) & nzchar(x)][1] }
   vs <- tryCatch(read.csv(paste0(other.tables.path, "display_interface/proc_variable_summary_v2.csv"), stringsAsFactors = FALSE), error = function(e) NULL)

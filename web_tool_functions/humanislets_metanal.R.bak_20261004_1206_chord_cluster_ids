@@ -73,7 +73,7 @@ getChordData<- function(corrcutoff=0.5,pvalcutoff=0.05,intragroup,reset="no"){
     donors <- readRDS("donors.rds")
 library(Hmisc)
      metadat<-read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"))
- df_clean <- metadat[metadat$record_id %in%donors, setdiff(colnames(metadat), c("record_id", "final_cluster"))]   # old v1 clusters not correlated: only cluster_v2
+ df_clean <- metadat[metadat$record_id %in%donors,-1]
 
 df_clean[] <- lapply(df_clean, function(x) {
   if (is.character(x) || is.factor(x)) as.numeric(factor(x)) else x

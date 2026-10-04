@@ -595,7 +595,7 @@ redcap_export_fun <- function(api_token,
 
   ## ---- 9. Spearman correlation ----------------------------------------------
   library(Hmisc)
-  df_clean <- metadata_norm[, setdiff(colnames(metadata_norm), c("record_id", "final_cluster"))]   # old v1 clusters not correlated: only cluster_v2
+  df_clean <- metadata_norm[, setdiff(colnames(metadata_norm), c("record_id", "final_cluster", "cluster_v2"))]   # cluster ids are labels, not values
   df_clean[] <- lapply(df_clean, function(x) if (is.character(x) || is.factor(x)) as.numeric(factor(x)) else x)
   df_clean <- df_clean[, colSums(!is.na(df_clean)) >= 6]
   rc <- rcorr(as.matrix(df_clean), type = "spearman")

@@ -100,6 +100,47 @@
 .kgAllLayerKeys <- c(.kgGeneLayerKeys, .kgMetaboliteLayerKeys,
                      .kgContaminantLayerKeys, .kgFluxLayerKeys)
 
+# ⚠ STAGED LAYERS -- A CONCEPT SCREEN RUNS ITS MAIN LAYERS AND OFFERS THE REST (user 2026-10-04: "in default we do only at
+# most three layer Bulk RNA-seq, Protein, Metabolomics HG / LG / ratio, and tell user what is provide but not calculate
+# yet ... only if both Bulk RNA-seq, Protein, has no data ... try other gene layers, if all Metabolomics layer no data, go
+# Contaminants"). MEASURED on F4 "top predictors of insulin release, adjusted for islet purity" (20 measures x 9 layers):
+# 1,386,571 tests, 132.8 s, of which ~108 s fitting -- pseudobulk alpha / beta alone were 792k of the tests.
+# The spec rides in the existing `layers` argument (no new parameter): groups split by "|", each "<primary>/<fallback>",
+# e.g. "rnaseq,protein/nanostring,pbrna_alpha,pbrna_beta|metabolite_hg,metabolite_lg,metabolite_ratio/contaminant".
+# A group runs its primary layers; ONLY when no primary layer has enough donors for this call does it run the fallback
+# instead. A fallback layer that is not run but has donors is OFFERED: written to the status file as `not_calculated`,
+# so the caller can say it can still be calculated. A `layers` value without "/" is read exactly as before.
+# Donors are counted from the layer table's donor COLUMNS (`dbListFields`, no data read) -- the same donors
+# `.kgLoadLayerMatrix` keeps -- intersected with the subset, and per phenotype those with a value (= `.note_layer`).
+.kgLayerDonors <- function(con, key){
+  lp <- .kgScreenLayer(key); if(is.null(lp)) return(character(0))
+  f <- try(DBI::dbListFields(con, lp[1]), silent = TRUE)
+  if(inherits(f, "try-error")) return(character(0))
+  grep("^R[0-9]+$", f, value = TRUE)
+}
+.kgLayerUsable <- function(con, key, keep_ids, phframe, phenos, minN){
+  dc <- intersect(.kgLayerDonors(con, key), keep_ids)
+  if(length(dc) < minN) return(FALSE)
+  rows <- intersect(dc, rownames(phframe))
+  any(vapply(phenos, function(ph){
+    v <- phframe[rows, ph]; sum(!is.na(v) & !(as.character(v) %in% c("", "NA"))) >= minN }, logical(1)))
+}
+.kgStagedLayers <- function(con, spec, keep_ids, phframe, phenos, minN){
+  run <- character(0); offered <- character(0)
+  for(g in strsplit(spec, "|", fixed = TRUE)[[1]]){
+    parts <- strsplit(g, "/", fixed = TRUE)[[1]]
+    prim <- tolower(trimws(strsplit(parts[1], "[,;]")[[1]])); prim <- prim[nzchar(prim)]
+    fb <- if(length(parts) > 1) tolower(trimws(strsplit(parts[2], "[,;]")[[1]])) else character(0)
+    fb <- fb[nzchar(fb)]
+    ok <- vapply(prim, function(k) .kgLayerUsable(con, k, keep_ids, phframe, phenos, minN), logical(1))
+    if(any(ok)) { run <- c(run, prim); offered <- c(offered, fb) } else run <- c(run, prim, fb)
+  }
+  run <- unique(run)
+  offered <- setdiff(unique(offered), run)
+  offered <- offered[vapply(offered, function(k) .kgLayerUsable(con, k, keep_ids, phframe, phenos, minN), logical(1))]
+  list(run = paste(run, collapse = ","), offered = offered)
+}
+
 # short layer key from a resolver display name, so `layers` takes short codes in BOTH engines
 # (e.g. "Bulk gene expression (RNA-seq)" -> "rnaseq"; "Metabolite (LG)" -> "metabolite_lg").
 .kgLayerKey <- function(display){
@@ -242,14 +283,15 @@
   # donor count and, per phenotype, the donors that also carry a value; written to `kg_assoc_layers.csv` beside
   # `kg_assoc.csv`. Status `too_few_donors` = skipped at the `minN` gate, `tested` = went to the fit.
   lstat <- list()
-  .note_layer <- function(disp, dc){
+  offered <- character(0)        # layers a staged spec offers but does not run (`.kgStagedLayers`)
+  .note_layer <- function(disp, dc, status = NULL){
     for(ph in phenos){
       v <- phframe[intersect(dc, rownames(phframe)), ph]
       lstat[[length(lstat)+1]] <<- data.frame(
         Layer = disp, Phenotype = ph, N_layer = length(dc),
         N_usable = sum(!is.na(v) & !(as.character(v) %in% c("", "NA"))), MinN = minN,
-        Status = if(length(dc) < minN) "too_few_donors" else "tested", Subset = subset_note,
-        stringsAsFactors = FALSE)
+        Status = if(!is.null(status)) status else if(length(dc) < minN) "too_few_donors" else "tested",
+        Subset = subset_note, stringsAsFactors = FALSE)
     }
   }
   # ⚠ ONE CLASS IS A DATA CONDITION, NOT A CRASH. A donor subset can leave a discrete phenotype with
@@ -366,6 +408,11 @@
     # other features happened to be named. Fit all -> subset the RESULTS.
     work <- list()
     if(is_screen){
+      # a staged spec ("<primary>/<fallback>" groups) -> the layers to run + the layers offered (see `.kgStagedLayers`)
+      if(grepl("/", layers, fixed = TRUE)){
+        st <- .kgStagedLayers(con, layers, keep_ids, phframe, phenos, minN)
+        layers <- st$run; offered <- st$offered
+      }
       # "all" on a SCREEN = the GENE layers (entity-coherent); a metabolite/contaminant/flux
       # screen is opt-in by naming its layer (e.g. layers="metabolite_hg").
       lays <- if(identical(layers, "all")) .kgGeneLayerKeys else tolower(trimws(strsplit(layers, "[,;]")[[1]]))
@@ -449,6 +496,13 @@
     }
   }
 
+  # an OFFERED layer (staged spec, not run, has donors) is written with its donor counts and Status `not_calculated`, so
+  # the caller can say it can still be calculated; contaminants are named per tissue, as the run would name them
+  for(k in offered){
+    dc <- intersect(.kgLayerDonors(con, k), keep_ids)
+    disps <- if(identical(k, "contaminant")) vapply(.kgContaminantTissues, function(ct) ct$label, character(1)) else k
+    for(dsp in disps) .note_layer(dsp, dc, status = "not_calculated")
+  }
   # the per-layer status (see `.note_layer`), written on EVERY return from here on -- RES-OK and the empty ones alike
   utils::write.csv(if(length(lstat)) do.call(rbind, lstat) else
                      data.frame(Layer = character(0), Phenotype = character(0), N_layer = integer(0),

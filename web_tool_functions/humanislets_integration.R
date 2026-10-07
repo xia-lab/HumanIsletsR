@@ -60,6 +60,38 @@ load_integ_omics <- function(mydb, omicsType, cell = "Alpha", metaboGluc = "LG",
     rownames(ft) <- ft$rxn
     drop_info(ft, c("rxn", "genes", "subsystem", "description"))
 
+  } else if (omicsType == "proc_methylation") {
+    # Methylation lives in its OWN database (HI_methylation.sqlite), not the mydb passed in,
+    # so it is read from the .qs cache instead: ~1.3s vs ~27s from sqlite. Same file and the
+    # same 8 annotation columns the DEA uses (humanislets_statistics.R, proc_methylation
+    # branch); built by scripts/convert_methylation_to_qs.R. Values are M-values.
+    # No feat_anno attribute, matching the metabolite/flux/contaminants blocks.
+    #
+    # The block is cut to the most variable METH_LOAD_CAP CpGs HERE, at load time, and NOT
+    # later in the screen: a 729,123 x n block costs ~340 MB as a data.frame, is copied again
+    # by drop_info, again by `[, shared]` and again by as.matrix() in the screen -- over 1 GB
+    # peak inside one web request, which hung the request with no R error. Cutting here means
+    # nothing downstream ever holds more than METH_LOAD_CAP rows.
+    METH_LOAD_CAP <- 50000
+    t0 <- proc.time()[["elapsed"]]
+    ft <- qs::qread(paste0(other.tables.path, "omics_processing_input/proc/proc_methylation_M.qs"))
+    rownames(ft) <- ft$feature_id
+    mat <- as.matrix(drop_info(ft, c("feature_id", "chr", "pos_hg38", "strand",
+                                     "gene", "gene_region", "cgi_relation", "cgi_name")))
+    rm(ft)
+    print(sprintf("proc_methylation: loaded %d CpGs x %d donors in %.1fs",
+                  nrow(mat), ncol(mat), proc.time()[["elapsed"]] - t0))
+    if (nrow(mat) > METH_LOAD_CAP) {
+      v <- matrixStats::rowVars(mat, na.rm = TRUE)
+      v[is.na(v)] <- -Inf
+      mat <- mat[order(v, decreasing = TRUE)[seq_len(METH_LOAD_CAP)], , drop = FALSE]
+      rm(v)
+      print(sprintf("proc_methylation: cut to top %d CpGs by variance (%.1fs total)",
+                    nrow(mat), proc.time()[["elapsed"]] - t0))
+    }
+    gc()
+    as.data.frame(mat)   # same type the other blocks return
+
   } else if (omicsType == "proc_contaminants") {
     ft <- dbReadTable(mydb, "proc_contaminants")
     ft <- ft[ft$Tissue == tissueType & ft$LOG_corrected == LOD_corrected, ]
@@ -289,7 +321,6 @@ stopifnot(all(meta$record_id == shared))
     print(paste("Adjusting for covariates:", paste(cov_sel, collapse = ", ")))
   }
 
-  proc_variable <- read.csv(paste0(other.tables.path, "display_interface/proc_variable_multiomics.csv"))
   out_anno <- qs::qread(paste0(other.tables.path,"libraries/gene_anno_full.qs")) 
   
   # Outcome vector for the SUPERVISED feature screen inside the loop below.
@@ -312,9 +343,25 @@ kpList <- lapply(names(dataList), function(omics_name) {
          else if (grepl("prot", omics_name)) 3000 
          else if (grepl("metabo", omics_name)) 500 
          else if (grepl("contaminants", omics_name)) 200 
+         else if (grepl("methylation", omics_name)) 1000   # explicit; was the implicit fall-through
          else 1000
   
   top_k <- min(n_features, cap)
+
+  # SAFETY NET ONLY: load_integ_omics() already cuts methylation to METH_LOAD_CAP (50,000)
+  # at load time, so this normally does nothing. It still fires if that cap is ever raised,
+  # keeping lmFit off a full ~729k-row block.
+  PRE_SCREEN_METHYLATION <- 50000
+  if (grepl("methylation", omics_name) && n_features > PRE_SCREEN_METHYLATION) {
+    .xm <- as.matrix(x)
+    .v  <- matrixStats::rowVars(.xm, na.rm = TRUE)
+    .v[is.na(.v)] <- -Inf
+    x <- x[order(.v, decreasing = TRUE)[seq_len(PRE_SCREEN_METHYLATION)], , drop = FALSE]
+    rm(.xm, .v); gc()
+    print(paste0("methylation pre-screen: ", n_features, " -> ", nrow(x),
+                 " CpGs by variance, before the supervised screen to ", top_k))
+    n_features <- nrow(x)
+  }
 
   # SUPERVISED screen: keep the top_k features most ASSOCIATED with the outcome.
   # limma moderated t covers every outcome type in one path: |t| of the group term
@@ -564,7 +611,7 @@ if (primaryType == "disc") {
   for(omics_nm in display_names) {
     loadings_mat <- diablo_model$loadings[[omics_nm]]
     # Guard: a selected omics can be absent from the fitted model (dropped when it loaded empty,
-    # lost all common donors, or is unwired like methylation) -> loadings_mat is NULL. Skip it
+    # lost all common donors) -> loadings_mat is NULL. Skip it
     # instead of crashing on loadings_mat[, comp] ("incorrect number of dimensions").
     if (is.null(loadings_mat)) { print(paste("Skipping", omics_nm, "- not in fitted model")); next }
 

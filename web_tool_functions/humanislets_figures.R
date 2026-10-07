@@ -838,426 +838,250 @@ plotExpressionByCell <- function(gene.id, display = FALSE){
 
 ################################################################################
 
-## Methylation pathway heatmap (self-contained; no HDF5Array/minfi). The gene-level
-## path below can't serve methylation (features are CpGs in a separate DB, not gene
-## rows in HI_omics). Here we map the pathway's Entrez genes -> CpGs (precomputed
-## map), load their beta from HI_methylation.sqlite, aggregate to per-gene mean beta
-## (gene x donor), then reuse the same phenotype-ordered, smoothed heatmap. Genes
-## that contain a significant CpG are marked '***'.
-.plotMethylationPathwayHeatmap <- function(pathName, funcLib, analysisVar, donors = "all", mode = "tool"){
-  suppressMessages({ library(RSQLite); library(pheatmap); library(smoother); library(data.table) })
+## Pathway heatmap DATA (2026-10-07). The page draws the heatmap itself, only when the user clicks
+## "Show heatmap" on a pathway. This step writes two small files to the session folder:
+##   pathway_heatmap.csv       one row per measured pathway feature (values > 7 samples), z-score per
+##                             feature across samples, samples ordered by the phenotype, rows grouped by
+##                             similar pattern (correlation, average linkage); the first row
+##                             ("__phenotype__") holds each sample's phenotype value in raw units.
+##   pathway_heatmap_meta.json pathway / phenotype labels for the page.
+## Only the pathway's features are read from the omics table, and only they are saved for
+## "Save Analysis" (savedAnalysis/pathway_heatmap_input.rds); the whole omics table is no longer copied.
+## pathName is the set ID (names(<library>$sets), e.g. "hsa04911"); a set name still works.
+
+# gene-set library -> list(sets, term), with the same readable names as the enrichment step
+.pathwayLibrary <- function(funcLib){
   lib.path <- paste0(other.tables.path, "libraries/")
+  if(funcLib == "hsa_kegg"){
+    raw  <- qs::qread(paste0(lib.path, "kegg_hsa_met.qs"))
+    nm   <- setNames(names(raw$path.ids), raw$path.ids)
+    term <- nm[names(raw$mset.list)]
+    term[is.na(term)] <- names(raw$mset.list)[is.na(term)]
+    return(list(sets = raw$mset.list, term = unname(term)))
+  }
+  lib <- readRDS(paste0(lib.path, funcLib, ".rds"))
+  list(sets = lib$sets, term = lib$term)
+}
 
-  # pathway -> Entrez genes
-  libraryRDS <- readRDS(paste0(lib.path, funcLib, ".rds"))
-  wi <- which(libraryRDS$term == pathName)
-  if(length(wi) == 0) return("RES-NO; pathway not found in library")
-  pathGenes <- as.character(libraryRDS$sets[[wi[1]]])
+.pathwayLookup <- function(lib, pathName){
+  wi <- match(pathName, names(lib$sets))
+  if(is.na(wi)) wi <- match(pathName, lib$term)
+  if(is.na(wi)) return(NULL)
+  list(id = names(lib$sets)[wi], name = lib$term[wi], members = as.character(lib$sets[[wi]]))
+}
 
-  # Entrez genes -> CpGs (precomputed map)
-  map <- qs::qread(paste0(lib.path, "methylation_cpg_anno.qs"))
-  map <- map[as.character(map$entrez) %in% pathGenes & !is.na(map$symbol) & map$symbol != "", c("cpg", "symbol")]
-  if(nrow(map) == 0) return("RES-NO; no CpGs map to this pathway")
+# phenotype values for the track in raw units (display_data/metadata_sum_raw.csv) when available
+.pathwayPhenoDisplay <- function(ids, analysisVar, stored){
+  f <- paste0(other.tables.path, "display_data/metadata_sum_raw.csv")
+  if(!file.exists(f)) return(stored)
+  hdr <- colnames(data.table::fread(f, nrows = 0))
+  if(!all(c("record_id", analysisVar) %in% hdr)) return(stored)
+  raw <- data.table::fread(f, select = c("record_id", analysisVar))
+  v <- raw[[analysisVar]][match(ids, raw$record_id)]
+  if(is.numeric(v) != is.numeric(stored)) return(stored)
+  v[is.na(v)] <- stored[is.na(v)]
+  v
+}
 
-  # load beta for those CpGs from the methylation DB
-  con  <- dbConnect(SQLite(), paste0(sqlite.path, "HI_methylation.sqlite"))
-  qin  <- paste(sprintf("'%s'", unique(map$cpg)), collapse = ",")
-  beta <- dbGetQuery(con, paste0("SELECT * FROM proc_methylation_beta WHERE feature_id IN (", qin, ")"))
-  dbDisconnect(con)
-  if(nrow(beta) == 0) return("RES-NO; no beta values for pathway CpGs")
-  anno.cols  <- c("feature_id","chr","pos_hg38","strand","gene","gene_region","cgi_relation","cgi_name")
-  donor.cols <- setdiff(colnames(beta), anno.cols)
-  rownames(beta) <- beta$feature_id
-  bmat <- as.matrix(beta[, donor.cols, drop = FALSE])
+# up / down / sig / NS per heatmap row, from the session's dea_results.csv (same file as the table)
+.pathwaySigFlags <- function(fid, gid){
+  out <- rep("NS", length(fid))
+  if(!file.exists("dea_results.csv")) return(out)
+  hdr <- colnames(data.table::fread("dea_results.csv", nrows = 0))
+  if(!("sig" %in% hdr)) return(out)
+  cols <- intersect(c("Feature", "Gene_ID", "kegg_id", "sig"), hdr)
+  dea  <- data.table::fread("dea_results.csv", select = cols, colClasses = "character")
+  i <- if("Feature" %in% cols) match(fid, dea$Feature) else rep(NA_integer_, length(fid))
+  for(k in intersect(c("Gene_ID", "kegg_id"), cols)){
+    j <- is.na(i)
+    if(any(j)) i[j] <- match(gid[j], dea[[k]])
+  }
+  out[!is.na(i)] <- dea$sig[i[!is.na(i)]]
+  out[is.na(out) | out == ""] <- "NS"
+  out
+}
 
-  # aggregate to per-gene mean beta (across the gene's CpGs), per donor
-  g    <- map[map$cpg %in% rownames(bmat), ]
-  bm   <- bmat[g$cpg, , drop = FALSE]
-  sums <- rowsum(bm, group = g$symbol, na.rm = TRUE)
-  cnts <- rowsum((!is.na(bm)) + 0, group = g$symbol)
-  feature_table <- as.data.frame(sums / cnts)
-  feature_table[is.na(feature_table)] <- NA   # 0/0 -> NaN -> NA
+# z-score, keep features with values in > 7 samples, group rows, write the two files
+.pathwayHeatmapWrite <- function(inp){
+  m <- inp$mat
+  keep <- rowSums(!is.na(m)) > 7
+  if(!any(keep)) return("RES-NO;None of this pathway's measured features has values in more than 7 samples")
+  m <- m[keep, , drop = FALSE]
+  lab <- inp$label[keep]; fid <- inp$feature[keep]; sig <- inp$sig[keep]
+  z <- t(scale(t(m)))
+  z[is.na(z) & !is.na(m)] <- 0                      # constant feature -> 0; a missing value stays empty
+  ord <- seq_len(nrow(z))
+  if(nrow(z) >= 3){
+    cc <- suppressWarnings(cor(t(z), use = "pairwise.complete.obs"))
+    d <- 1 - cc; d[!is.finite(d)] <- 1; diag(d) <- 0
+    ord <- hclust(as.dist(d), method = "average")$order
+  }
+  zr <- round(z[ord, , drop = FALSE], 3)
+  zc <- ifelse(is.na(zr), "", as.character(zr))
+  ph <- as.character(inp$pheno); ph[is.na(ph)] <- ""
+  vals <- rbind(ph, zc)
+  colnames(vals) <- inp$samples
+  out <- cbind(data.frame(label = c("__phenotype__", lab[ord]), feature = c("", fid[ord]), sig = c("", sig[ord]),
+                          stringsAsFactors = FALSE),
+               as.data.frame(vals, stringsAsFactors = FALSE, check.names = FALSE))
+  data.table::fwrite(out, "pathway_heatmap.csv")
+  meta <- inp$meta
+  meta$n_features <- nrow(z); meta$n_samples <- ncol(z)
+  jsonlite::write_json(meta, "pathway_heatmap_meta.json", auto_unbox = TRUE)
+  return("RES-OK")
+}
 
-  # phenotype (donor metadata)
-  con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
-  metadata  <- dbGetQuery(con, "SELECT * FROM proc_metadata")
-  meta.info <- dbGetQuery(con, paste0("SELECT * FROM proc_variable_summary WHERE column='", analysisVar, "'"))
-  dbDisconnect(con)
-  if(!(analysisVar %in% colnames(metadata))) return("RES-NO; phenotype not found for methylation")
-  meta.type <- if(nrow(meta.info)) meta.info$type else "cont"
+# keep the small input for "Save Analysis" (reproduce locally: plotPathwayHeatmap(..., mode = "local"))
+.pathwayHeatmapSaveInput <- function(inp){
+  dir.create("savedAnalysis", showWarnings = FALSE)
+  saveRDS(inp, "savedAnalysis/pathway_heatmap_input.rds")
+  if(exists("rcmd")) write(gsub("tool", "local", rcmd), file = "savedAnalysis/Rhistory.R", append = TRUE)
+  dump(c("plotPathwayHeatmap", ".plotMethylationPathwayHeatmap", ".pathwayHeatmapWrite"),
+       file = "savedAnalysis/plotPathwayHeatmap.R")
+}
+
+# phenotype + samples shared by both heatmap functions; returns list(samples, pheno, display, info)
+.pathwayPhenotype <- function(analysisVar, meta.table, id.col, sample.ids, donors, cell = NULL, glucose = NULL, scrna = FALSE){
+  tdb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
+  metadata  <- dbGetQuery(tdb, paste0("SELECT * FROM ", meta.table))
+  meta.info <- dbGetQuery(tdb, "SELECT * FROM proc_variable_summary WHERE column = ?", params = list(analysisVar))
+  dbDisconnect(tdb)
+  if(nrow(meta.info) == 0 && analysisVar %in% c("tc_weight_recovery", "tg_weight_recovery", "fc_weight_recovery", "ce"))
+    meta.info <- data.frame(column = analysisVar, type = "cont", stringsAsFactors = FALSE)
+  if(!(analysisVar %in% colnames(metadata))) stop("The phenotype ", analysisVar, " was not found")
+  meta.type <- if(nrow(meta.info)) meta.info$type[1] else "cont"
+  if(grepl("_donor", analysisVar)){
+    metadata <- metadata[metadata$cell_type == cell, ]
+  } else if(scrna){   # ephys_cell names the glucose column glucose_mM_cell (values 1.0 / 5.0 / 10.0)
+    gcol <- intersect(c("glucose_mM", "glucose_mM_cell"), colnames(metadata))[1]
+    metadata <- metadata[metadata$cell_type == cell &
+                         as.character(as.numeric(metadata[[gcol]])) == as.character(as.numeric(glucose)), ]
+  }
   if(donors == "subset" && file.exists("donors.rds")){
     metadata <- metadata[metadata$record_id %in% readRDS("donors.rds"), ]
+    if(nrow(metadata) < 10) stop("Fewer than 10 samples in the selected donor subset")
   }
-  metadata <- metadata[, c("record_id", analysisVar)]
-  if(meta.type == "cont") metadata[, analysisVar] <- as.numeric(metadata[, analysisVar])
-  metadata <- metadata[metadata$record_id %in% colnames(feature_table), ]
-  metadata <- metadata[!is.na(metadata[, analysisVar]), ]
-  metadata <- metadata[order(metadata[, analysisVar]), ]
-  if(nrow(metadata) == 0) return("RES-NO; no donors with this phenotype")
-  feature_table <- feature_table[, match(metadata$record_id, colnames(feature_table)), drop = FALSE]
+  s.id <- as.character(metadata[[id.col]]); ph <- metadata[[analysisVar]]
+  if(meta.type == "cont") ph <- suppressWarnings(as.numeric(ph))
+  keep <- !is.na(ph) & s.id %in% sample.ids & !duplicated(s.id)
+  s.id <- s.id[keep]; ph <- ph[keep]
+  o <- order(ph); s.id <- s.id[o]; ph <- ph[o]
+  if(length(s.id) == 0) stop("No samples have both this phenotype and these data")
+  disp <- if(id.col == "record_id" && meta.table == "proc_metadata") .pathwayPhenoDisplay(s.id, analysisVar, ph) else ph
+  label <- if(nrow(meta.info) && "display" %in% colnames(meta.info) && !is.na(meta.info$display[1])) meta.info$display[1] else analysisVar
+  list(samples = s.id, display = disp, type = meta.type, label = label)
+}
 
-  # mark genes that contain a significant CpG ('***')
-  if(file.exists("dea_results.csv")){
-    dea <- tryCatch(data.table::fread("dea_results.csv", select = c("Feature", "sig")), error = function(e) NULL)
-    if(!is.null(dea)){
-      sig.syms <- unique(map$symbol[map$cpg %in% dea$Feature[dea$sig != "NS"]])
-      di <- which(rownames(feature_table) %in% sig.syms)
-      if(length(di)) rownames(feature_table)[di] <- paste0(rownames(feature_table)[di], "***")
+## Methylation: the pathway's Entrez genes -> CpGs (precomputed map) -> beta from HI_methylation.sqlite
+## -> per-gene mean beta (gene x donor). A gene is flagged "sig" when one of its CpGs is significant.
+.plotMethylationPathwayHeatmap <- function(pathName, funcLib, analysisVar, donors = "all", mode = "tool"){
+  suppressMessages({ library(RSQLite); library(data.table) })
+  if(mode != "tool") return(.pathwayHeatmapWrite(readRDS("pathway_heatmap_input.rds")))
+  tryCatch({
+    pw <- .pathwayLookup(.pathwayLibrary(funcLib), pathName)
+    if(is.null(pw)) stop("This pathway was not found in the ", funcLib, " library")
+    map <- qs::qread(paste0(other.tables.path, "libraries/methylation_cpg_anno.qs"))
+    map <- map[as.character(map$entrez) %in% pw$members & !is.na(map$symbol) & map$symbol != "", c("cpg", "symbol", "entrez")]
+    if(nrow(map) == 0) stop("No CpGs map to this pathway's genes")
+    con  <- dbConnect(SQLite(), paste0(sqlite.path, "HI_methylation.sqlite"))
+    qin  <- paste(sprintf("'%s'", unique(map$cpg)), collapse = ",")
+    beta <- dbGetQuery(con, paste0("SELECT * FROM proc_methylation_beta WHERE feature_id IN (", qin, ")"))
+    dbDisconnect(con)
+    if(nrow(beta) == 0) stop("No beta values for this pathway's CpGs")
+    anno.cols  <- c("feature_id", "chr", "pos_hg38", "strand", "gene", "gene_region", "cgi_relation", "cgi_name")
+    bmat <- as.matrix(beta[, setdiff(colnames(beta), anno.cols), drop = FALSE]); rownames(bmat) <- beta$feature_id
+    g    <- map[map$cpg %in% rownames(bmat), ]
+    bm   <- bmat[g$cpg, , drop = FALSE]
+    m    <- rowsum(bm, group = g$symbol, na.rm = TRUE) / rowsum((!is.na(bm)) + 0, group = g$symbol)
+    m[!is.finite(m)] <- NA
+    ph <- .pathwayPhenotype(analysisVar, "proc_metadata", "record_id", colnames(m), donors)
+    sig <- rep("NS", nrow(m))
+    if(file.exists("dea_results.csv")){
+      dea <- tryCatch(data.table::fread("dea_results.csv", select = c("Feature", "sig")), error = function(e) NULL)
+      if(!is.null(dea)) sig[rownames(m) %in% unique(map$symbol[map$cpg %in% dea$Feature[dea$sig != "NS"]])] <- "sig"
     }
-  }
-
-  # drop genes with too many missing donors
-  feature_table <- feature_table[apply(feature_table, 1, function(x) sum(!is.na(x))) > 7, , drop = FALSE]
-  if(nrow(feature_table) == 0) return("RES-NO; too few non-missing values")
-
-  # smooth across phenotype-ordered donors + heatmap (same look as plotPathwayHeatmap)
-  colAnn <- data.frame(Metadata = metadata[, 2]); rownames(colAnn) <- metadata$record_id
-  sm <- feature_table
-  sm[is.na(feature_table)] <- min(sm, na.rm = TRUE)
-  sm <- as.data.frame(t(apply(sm, 1, function(x)
-          smoother::smth.gaussian(as.numeric(x), window = 0.03, alpha = 2.5, tails = TRUE, na.rm = TRUE))))
-  colnames(sm) <- colnames(feature_table); rownames(sm) <- rownames(feature_table)
-  sm[is.na(feature_table)] <- NA
-
-  hm <- pheatmap::pheatmap(sm, show_colnames = ncol(feature_table) < 50, annotation_col = colAnn,
-          cluster_cols = FALSE, legend = TRUE, annotation_names_col = FALSE, scale = "row",
-          silent = TRUE, border_color = NA, main = pathName, na_col = "black",
-          color = colorRampPalette(c("#000080", "#FFF300"))(30))
-  hm.height <- nrow(feature_table) * 0.2 + 0.75
-  Cairo::Cairo(file = "pathway_heatmap.png", unit = "in", res = 300, width = 10, height = hm.height, type = "PNG", bg = "white")
-  print(hm); dev.off()
-  ggplot2::ggsave("pathway_heatmap.svg", plot = hm, width = 10, height = hm.height, dpi = 300)
-  ggplot2::ggsave("pathway_heatmap.pdf", plot = hm, width = 10, height = hm.height, dpi = 300)
-  write.csv(sm, "pathway_heatmap.csv")
-  return("RES-OK")
+    inp <- list(mat = m[, ph$samples, drop = FALSE], samples = ph$samples, label = rownames(m), feature = rownames(m),
+                sig = sig, pheno = ph$display,
+                meta = list(set_id = pw$id, set_name = pw$name, library = funcLib, omics = "proc_methylation",
+                            phenotype = ph$label, phenotype_id = analysisVar, phenotype_type = ph$type,
+                            samples_are = "donors", value = "mean beta of the gene's CpGs"))
+    .pathwayHeatmapSaveInput(inp)
+    .pathwayHeatmapWrite(inp)
+  }, error = function(e) paste0("RES-NO;", conditionMessage(e)))
 }
 
 plotPathwayHeatmap <- function(pathName, funcLib, analysisVar, omicsType, varGroup, cell, glucose, donors = "all", version="v2", mode="local", batch = "NA", metaboGluc = "NA"){
 
-    # Methylation: features are CpGs in a separate DB (HI_methylation.sqlite), not
-    # gene rows in HI_omics -> handle in a self-contained, HDF5Array-free helper.
     if(identical(omicsType, "proc_methylation")){
       return(.plotMethylationPathwayHeatmap(pathName, funcLib, analysisVar, donors, mode))
     }
-   
-    library(dplyr)
-    library(pheatmap)
-    library(RSQLite)
-    library(rhdf5)
-    library(smoother)
-    library(RColorBrewer)
-    
-    # set omics category
-    if(omicsType == "proc_scrna"){
-      sc.h5.path <- ifelse(version=="v2", h5.v2.path, h5.path)
-      table.path <- paste0(sc.h5.path, "sc_", cell, "_", glucose, ".h5")
-      meta.table <- "ephys_cell"
-    } else if(omicsType == "proc_pbrna"){
-      omics.category <- "bulk"
-      omics.type <- paste0(omicsType, "_", cell)
-      meta.table <- "proc_metadata"
-    } else {
-      omics.category <- "bulk"
-      if(grepl("_donor", analysisVar)){
-        meta.table <- "ephys_donor"
+    suppressMessages({ library(RSQLite); library(data.table) })
+    if(mode != "tool") return(.pathwayHeatmapWrite(readRDS("pathway_heatmap_input.rds")))
+
+    tryCatch({
+      pw <- .pathwayLookup(.pathwayLibrary(funcLib), pathName)
+      if(is.null(pw)) stop("This pathway was not found in the ", funcLib, " library")
+
+      if(omicsType == "proc_scrna"){
+        suppressMessages(library(rhdf5))
+        sc.h5.path <- ifelse(version=="v2", h5.v2.path, h5.path)
+        table.path <- paste0(sc.h5.path, "sc_", cell, "_", glucose, ".h5")
+        fi <- as.data.frame(h5read(table.path, "meta/genes")); H5close()
+        if(version == "v2"){ gid <- as.character(fi$entrez); lab <- as.character(fi$symbol) } else { gid <- as.character(fi[, 1]); lab <- as.character(fi[, 3]) }
+        cells <- h5read(table.path, "meta/cells/cellid"); H5close()
+        rows <- which(!is.na(gid) & gid %in% pw$members)
+        if(length(rows) == 0) stop("None of this pathway's genes is measured in this data")
+        x <- h5read(table.path, "data/norm_expression", index = list(rows, NULL)); H5close()   # only the pathway's rows
+        m <- as.matrix(x); colnames(m) <- cells
+        m[m < 0.0001] <- NA
+        fid <- lab[rows]; label <- lab[rows]; gid <- gid[rows]
+        meta.table <- "ephys_cell"; id.col <- "cell_id"
       } else {
-        meta.table <- "proc_metadata"
-      }
-    }
-    if(mode=="tool"){
-     # set library file path
-    lib.path <- paste0(other.tables.path, "libraries/");
-    
-    # get omics data
-    if(omicsType == "proc_scrna"){
-
-      feature_info <- h5read(table.path, "meta/genes") %>% as.data.frame()
-      H5close()
-
-      if(version=="v2"){
-        # v2 H5 has named columns: ensembl, entrez, name, symbol
-        feature_info$gene_id <- feature_info$entrez
-      } else {
-        feature_info <- feature_info[,c(1,3,2)]
-        colnames(feature_info) <- c("gene_id", "symbol", "name")
-      }
-
-      cells <- h5read(table.path, "meta/cells/cellid")
-      H5close()
-
-      feature_table <- h5read(table.path, "data/norm_expression") %>% as.data.frame()
-      H5close()
-
-      colnames(feature_table) <- cells
-
-      genes.keep <- !is.na(feature_info$gene_id)
-      feature_table <- feature_table[genes.keep, ]
-      feature_info <- feature_info[genes.keep, ]
-      # Use symbol as rowname for display; gene_id (entrez) is used for pathway matching
-      rownames(feature_table) <- if(version=="v2") feature_info$symbol else feature_info$gene_id
-      feature_table[feature_table < 0.0001] <- NA
-    } else {
-      omics.db <- ifelse(version=="v2", "HI_omics_v2.sqlite", "HI_omics.sqlite")
-      mydb <- dbConnect(SQLite(), paste0(sqlite.path, omics.db))
-      if(omicsType == "proc_pbrna"){
-        table.nm <- paste0(omicsType, "_", cell)
-        feature_table <- dbReadTable(mydb, table.nm)
-      } else if(omicsType == "proc_metabolite"){
-        # Metabolite data is stored in pre-split tables: proc_metabolite_{HG|LG|ratio}
-        # and proc_metabolite_combat_{HG|LG|ratio}
-        base_nm  <- if(!is.null(batch) && batch == "combat") "proc_metabolite_combat" else "proc_metabolite"
-        gluc_sfx <- switch(if(!is.null(metaboGluc) && metaboGluc != "" && metaboGluc != "NA") metaboGluc else "LG",
-                           "HG" = "HG", "LG" = "LG", "HG_LG_ratio" = "ratio", "LG")
-        table.nm <- paste0(base_nm, "_", gluc_sfx)
-        feature_table <- dbReadTable(mydb, table.nm)
-      } else {
-        # proc_prot_v2 is a label -> the combined or combat table.
-        qtab <- if(omicsType == "proc_prot_v2"){ if(!is.null(batch) && batch == "combat") "proc_prot_combat" else "proc_prot_combine" } else omicsType
-        feature_table <- dbReadTable(mydb, qtab)
-      }
-      dbDisconnect(mydb)
-      if(version=="v2" && omicsType == "proc_pbrna"){
-        # v2 pbrna: 4 info columns (symbol, gene_id, ensembl, name)
-        # symbol is the primary key; deduplicate by p-value (keep smallest P_value per symbol)
-        feature_info  <- feature_table[, c(1:4)]
-        feature_table <- feature_table[, -c(1:4)]
-        dup_syms <- unique(feature_info$symbol[duplicated(feature_info$symbol)])
-        if(length(dup_syms) > 0){
-          if(file.exists("dea_results.csv")){
-            dea.tmp <- read.csv("dea_results.csv")
-            for(sym in dup_syms){
-              dup_idx <- which(feature_info$symbol == sym)
-              pvals   <- dea.tmp$P_value[match(feature_info$symbol[dup_idx], dea.tmp$Feature)]
-              keep    <- dup_idx[which.min(replace(pvals, is.na(pvals), Inf))]
-              remove  <- dup_idx[dup_idx != keep]
-              feature_table <- feature_table[-remove, ]
-              feature_info  <- feature_info[-remove, ]
-            }
-          } else {
-            # fallback: keep first occurrence when dea_results not available
-            keep_idx      <- !duplicated(feature_info$symbol)
-            feature_info  <- feature_info[keep_idx, ]
-            feature_table <- feature_table[keep_idx, ]
-          }
+        table.nm <- if(omicsType == "proc_pbrna") paste0(omicsType, "_", cell) else
+                    if(omicsType == "proc_metabolite"){
+                      base_nm  <- if(!is.null(batch) && batch == "combat") "proc_metabolite_combat" else "proc_metabolite"
+                      gluc_sfx <- switch(if(!is.null(metaboGluc) && metaboGluc != "" && metaboGluc != "NA") metaboGluc else "LG",
+                                         "HG" = "HG", "LG" = "LG", "HG_LG_ratio" = "ratio", "LG")
+                      paste0(base_nm, "_", gluc_sfx)
+                    } else
+                    if(omicsType == "proc_prot_v2"){ if(!is.null(batch) && batch == "combat") "proc_prot_combat" else "proc_prot_combine" } else
+                    omicsType
+        idcol <- if(omicsType == "proc_metabolite") "kegg_id" else "gene_id"
+        db <- dbConnect(SQLite(), paste0(sqlite.path, ifelse(version == "v2", "HI_omics_v2.sqlite", "HI_omics.sqlite")))
+        ft <- do.call(rbind, lapply(split(pw$members, ceiling(seq_along(pw$members) / 900)), function(ids)
+                dbGetQuery(db, sprintf("SELECT * FROM %s WHERE CAST(%s AS TEXT) IN (%s)", table.nm, idcol,
+                                       paste(rep("?", length(ids)), collapse = ",")), params = as.list(ids))))
+        dbDisconnect(db)
+        if(is.null(ft) || nrow(ft) == 0) stop("None of this pathway's features is measured in this data")
+        cn   <- colnames(ft)
+        info <- intersect(cn, c("accession", "id", "gene_id", "symbol", "name", "biotype", "Protein_Group", "ensembl",
+                                "compound", "inchikey", "ik_conn", "hmdb_id", "kegg_id", "gem_id",
+                                "super_class", "main_class", "sub_class"))
+        fid <- if("accession" %in% cn) ft$accession else if("id" %in% cn) ft$id else if("compound" %in% cn) ft$compound else
+               if(omicsType == "proc_pbrna") ft$symbol else as.character(ft$gene_id)
+        label <- if("compound" %in% cn) ft$compound else ifelse(is.na(ft$symbol) | ft$symbol == "", fid, ft$symbol)
+        gid <- as.character(ft[[idcol]])
+        m <- as.matrix(ft[, setdiff(cn, info), drop = FALSE]); storage.mode(m) <- "numeric"
+        if(omicsType == "proc_pbrna" && anyDuplicated(fid)){   # one row per symbol: lowest DEA p-value, as before
+          p <- rep(Inf, length(fid))
+          d <- tryCatch(data.table::fread("dea_results.csv", select = c("Feature", "P_value")), error = function(e) NULL)
+          if(!is.null(d)){ pp <- d$P_value[match(fid, d$Feature)]; p[!is.na(pp)] <- pp[!is.na(pp)] }
+          o <- order(fid, p); k <- sort(o[!duplicated(fid[o])])
+          m <- m[k, , drop = FALSE]; fid <- fid[k]; label <- label[k]; gid <- gid[k]
         }
-        rownames(feature_table) <- as.character(feature_info$symbol)
-      } else if(omicsType == "proc_metabolite"){
-        # 9 info columns: compound, inchikey, ik_conn, hmdb_id, kegg_id, gem_id,
-        #                  super_class, main_class, sub_class
-        rownames(feature_table) <- feature_table$compound
-        feature_info <- feature_table[,c(1:9)]
-        feature_table <- feature_table[,-c(1:9)]
-      } else if(version == "v2" && omicsType == "proc_rnaseq"){
-        # v2 rnaseq: 5 info columns (accession, gene_id, symbol, name, biotype)
-        # accession (Ensembl) is unique; gene_id (Entrez) is NOT — multiple Ensembl IDs can share one Entrez ID
-        # Use accession as internal rowname; match pathGenes (Entrez IDs) via gene_id column later
-        feature_info  <- feature_table[, c(1:5)]
-        feature_table <- feature_table[, -c(1:5)]
-        rownames(feature_table) <- feature_info$accession
-      } else if(omicsType %in% c("proc_prot_b1","proc_prot_b2","proc_prot_v2")){
-        # proteomics v2: 5 info cols (id, gene_id, symbol, name, Protein_Group); rowname = id.
-        # Match pathGenes (Entrez) via the gene_id column (is_v2_gene_expr below); display = symbol.
-        prot.cols     <- c("id","gene_id","symbol","name","Protein_Group")
-        feature_info  <- feature_table[, prot.cols]
-        feature_table <- feature_table[, !(colnames(feature_table) %in% prot.cols)]
-        rownames(feature_table) <- feature_info$id
-      } else if(version == "v2" && omicsType == "proc_nanostring_merge"){
-        # v2 nanostring: 4 info columns (symbol, gene_id, ensembl, name).
-        # gene_id (Entrez) stays the rowname so pathGenes match directly -- nanostring
-        # is deliberately excluded from is_v2_gene_expr below. v1 keeps 3 info columns
-        # (gene_id, symbol, name) and falls through to the branch below.
-        feature_info  <- feature_table[, c(1:4)]
-        feature_table <- feature_table[, -c(1:4)]
-        rownames(feature_table) <- as.character(feature_info$gene_id)
-      } else {
-        rownames(feature_table) <- feature_table$gene_id
-        feature_info <- feature_table[,c(1:3)]
-        feature_table <- feature_table[,-c(1:3)]
-      }
-    }
-
-    # get metadata
-    mydb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
-    query <- paste0("SELECT * FROM ", meta.table)
-    metadata <- dbGetQuery(mydb, query)
-
-    # filter by cell and glucose if relevant
-    if(grepl("_donor", analysisVar)){
-      metadata <- metadata[metadata$cell_type == cell, ]
-    } else if(omicsType == "proc_scrna"){
-      metadata <- metadata[metadata$cell_type == cell & metadata$glucose_mM == glucose, ]
-    }
-
-    query <- paste0("SELECT * FROM proc_variable_summary WHERE column='", analysisVar, "'")
-    meta.info <- dbGetQuery(mydb, query)
-    # Handle variables not in proc_variable_summary (e.g., lipid extraction)
-    lipid.vars <- c('tc_weight_recovery', 'tg_weight_recovery', 'fc_weight_recovery', 'ce')
-    if(nrow(meta.info) == 0 && analysisVar %in% lipid.vars){
-      meta.info <- data.frame(column = analysisVar, type = "cont", stringsAsFactors = FALSE)
-    }
-    dbDisconnect(mydb)
-
-    # get pathway features from library
-    if(funcLib == "hsa_kegg"){
-      # KEGG metabolite library: kegg_hsa_met.qs
-      # mset.list: named by KEGG pathway IDs (hsa00010 ...) → vectors of KEGG compound IDs
-      # path.ids:  named vector  (human-readable name → KEGG pathway ID)
-      raw_lib       <- qs::qread(paste0(lib.path, "kegg_hsa_met.qs"))
-      name_lookup   <- setNames(names(raw_lib$path.ids), raw_lib$path.ids)  # hsa00010 → "Glycolysis..."
-      readable_names <- name_lookup[names(raw_lib$mset.list)]
-      readable_names[is.na(readable_names)] <- names(raw_lib$mset.list)[is.na(readable_names)]
-      libraryRDS <- list(term = unname(readable_names), sets = raw_lib$mset.list)
-    } else {
-      libraryRDS <- readRDS(paste0(lib.path, funcLib, ".rds"))
-    }
-    pathGenes <- libraryRDS$sets[[which(libraryRDS$term == pathName)]]
-
-    saveRDS(feature_info,"savedAnalysis/feature_info.rds")
-    saveRDS(feature_table,"savedAnalysis/feature_table.rds")
-    saveRDS(meta.info,"savedAnalysis/meta.info.rds")
-    saveRDS(pathGenes,"savedAnalysis/pathGenes.rds")
-    rcmd <- gsub("tool","local",rcmd)
-    write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
-     if(!file.exists("savedAnalysis/plotPathwayHeatmap.R")){
-       dump("plotPathwayHeatmap", file = "savedAnalysis/plotPathwayHeatmap.R",append=T)
-     }     
-    
-   }else{
-       feature_info <- readRDS("feature_info.rds")
-     feature_table <- readRDS("feature_table.rds")
-     meta.info <- readRDS("meta.info.rds")
-      pathGenes <- readRDS("pathGenes.rds")
-   }
-    meta.type <- meta.info$type
-
-    # get only relevant metadata
-    if(omicsType == "proc_scrna"){
-      # filter by donors
-      if(donors == "subset"){
-        donor.list <- readRDS("donors.rds")
-        cells.keep <- metadata$cell_id[metadata$record_id %in% donor.list]
-        metadata <- metadata[metadata$cell_id %in% cells.keep,]
-        if(dim(metadata)[1] < 10){return("RES-NO")}
-      }        
-      metadata <- metadata[,c("cell_id", analysisVar)]
-      colnames(metadata)[1] <- "record_id"
-    } else {
-      # filter by donors
-      if(donors == "subset"){
-        donor.list <- readRDS("donors.rds")
-        metadata <- metadata[metadata$record_id %in% donor.list,]
-        if(dim(metadata)[1] < 10){return("RES-NO")}
+        meta.table <- if(grepl("_donor", analysisVar)) "ephys_donor" else "proc_metadata"
+        id.col <- "record_id"
       }
 
-      metadata <- metadata[,c("record_id", analysisVar)]
-    }
-
-    if(meta.type == "cont"){metadata[,analysisVar] <- as.numeric(metadata[,analysisVar])}
-    metadata <- metadata[metadata$record_id %in% colnames(feature_table), ]
-    metadata <- metadata[order(metadata[,analysisVar]), ]
-    metadata <- metadata[!is.na(metadata[,analysisVar]), ]
-    if(nrow(metadata) == 0){ return("RES-NO") }
-
-    # make feature table match metadata table
-    # For v2 gene expression (except nanostring): rownames are Ensembl/symbol (not Entrez),
-    # so match pathGenes (Entrez IDs from libraries) via the gene_id column.
-    # For nanostring and v1: gene_id IS the rowname, match directly.
-    is_v2_gene_expr <- (version == "v2" && omicsType %in% c("proc_rnaseq", "proc_scrna")) ||
-                       (version == "v2" && grepl("proc_pbrna", omicsType)) ||
-                       omicsType %in% c("proc_prot_b1","proc_prot_b2","proc_prot_v2")
-    if(omicsType == "proc_metabolite"){
-      # pathGenes are KEGG compound IDs — match by kegg_id column
-      keep_rows <- rownames(feature_table)[feature_info$kegg_id %in% pathGenes]
-      feature_table <- feature_table[keep_rows, colnames(feature_table) %in% metadata$record_id, drop = FALSE]
-    } else if(is_v2_gene_expr){
-      # rownames are Ensembl accession / symbol; match pathGenes (Entrez) via gene_id column
-      keep_rows <- rownames(feature_table)[feature_info$gene_id %in% pathGenes]
-      feature_table <- feature_table[keep_rows, colnames(feature_table) %in% metadata$record_id, drop = FALSE]
-    } else {
-      feature_table <- feature_table[rownames(feature_table) %in% pathGenes, colnames(feature_table) %in% metadata$record_id]
-    }
-    if(nrow(feature_table) == 0){ return("RES-NO") }
-    feature_table <- feature_table[, match(metadata$record_id, colnames(feature_table)), drop = FALSE]
-    if(ncol(feature_table) == 0){ return("RES-NO") }
-
-    # sync feature_info to subsetted rows, then set display labels
-    if(omicsType == "proc_metabolite"){
-      feat.vec     <- rownames(feature_table)
-      hit.inx      <- match(feat.vec, feature_info$compound)
-      feature_info <- feature_info[hit.inx, ]
-      # rownames are already compound names — no renaming needed
-    } else if(version == "v2" && omicsType == "proc_rnaseq"){
-      feat.vec     <- rownames(feature_table)      # Ensembl accessions
-      hit.inx      <- match(feat.vec, feature_info$accession)
-      feature_info <- feature_info[hit.inx, ]
-      display_labels <- feature_info$symbol
-      display_labels[is.na(display_labels) | display_labels == ""] <- feature_info$gene_id[is.na(display_labels) | display_labels == ""]
-      rownames(feature_table) <- display_labels
-    } else if(version == "v2" && (grepl("proc_pbrna", omicsType) || omicsType == "proc_scrna")){
-      # rownames are unique symbols (deduplicated by p-value) — sync feature_info directly
-      feat.vec     <- rownames(feature_table)
-      hit.inx      <- match(feat.vec, as.character(feature_info$symbol))
-      feature_info <- feature_info[hit.inx, ]
-      rownames(feature_table) <- as.character(feature_info$symbol)
-    } else if(omicsType %in% c("proc_prot_b1","proc_prot_b2","proc_prot_v2")){
-      feat.vec       <- rownames(feature_table)   # id
-      hit.inx        <- match(feat.vec, feature_info$id)
-      feature_info   <- feature_info[hit.inx, ]
-      display_labels <- feature_info$symbol
-      display_labels[is.na(display_labels) | display_labels == ""] <- feature_info$id[is.na(display_labels) | display_labels == ""]
-      rownames(feature_table) <- display_labels
-    } else {
-      feat.vec <- rownames(feature_table)
-      hit.inx  <- match(feat.vec, feature_info$gene_id)
-      feature_info <- feature_info[hit.inx, ]
-      feature_info$symbol[is.na(feature_info$symbol)] <- feature_info$gene_id[is.na(feature_info$symbol)]
-      rownames(feature_table) <- feature_info$symbol
-    }
-
-    # highlight DEGs
-    dea.res <- read.csv("dea_results.csv")
-    deg.ind <- which(rownames(feature_table) %in% dea.res$Feature[dea.res$sig != "NS"])
-    if(length(deg.ind) > 0){
-      rownames(feature_table)[deg.ind] <- paste0(rownames(feature_table)[deg.ind], "***")
-    }
-
-    # remove features with too many NAs
-    num.vals <- apply(feature_table, 1, function(x){sum(!is.na(x))})
-    feature_table <- feature_table[num.vals > 7, ]
-    if(nrow(feature_table) == 0){ return("RES-NO") }
-
-    # create heatmap column annotation
-    colAnn <- data.frame(Metadata = metadata[,2])
-    rownames(colAnn) <- metadata$record_id
-
-    # smooth values
-    smooth.df <- feature_table
-    smooth.df[is.na(feature_table)] <- min(smooth.df, na.rm = T) # must replace NA with low value for smoothing
-    smooth.df <- apply(smooth.df, 1, function(x){
-      smth.gaussian(as.numeric(x), window = 0.03, alpha = 2.5, tails = TRUE, na.rm = TRUE)
-    }) %>% t() %>% as.data.frame()
-    colnames(smooth.df) <- colnames(feature_table)
-    smooth.df[is.na(feature_table)] <- NA # add NAs back
-
-    # create heatmap
-    if(dim(feature_table)[2] < 50){ show.donorID = TRUE } else { show.donorID = FALSE }
-
-    hm <- pheatmap(smooth.df, show_colnames = show.donorID, annotation_col = colAnn, cluster_cols = FALSE,
-                   legend = TRUE, annotation_names_col = FALSE, scale = "row", silent = TRUE, border_color = NA,
-                   main = pathName, na_col = "black", color=colorRampPalette(c("#000080", "#FFF300"))(30))
-
-    # plot heatmap
-    hm.height <- dim(feature_table)[1]*0.2 + 0.75
-    Cairo::Cairo(file = "pathway_heatmap.png", unit="in", res=300, width=10, 
-                 height= hm.height, type="PNG", bg="white");
-        print(hm)
-    dev.off()
-
-      ggplot2::ggsave("pathway_heatmap.svg", plot = hm, width = 10, height =  hm.height, dpi = 300)
-    ggplot2::ggsave("pathway_heatmap.pdf", plot = hm, width = 10, height =  hm.height, dpi = 300)
-    
-    write.csv(smooth.df,"pathway_heatmap.csv")
-    return("RES-OK")
+      ph <- .pathwayPhenotype(analysisVar, meta.table, id.col, colnames(m), donors, cell, glucose, scrna = omicsType == "proc_scrna")
+      inp <- list(mat = m[, ph$samples, drop = FALSE], samples = ph$samples, label = label, feature = fid,
+                  sig = .pathwaySigFlags(fid, gid), pheno = ph$display,
+                  meta = list(set_id = pw$id, set_name = pw$name, library = funcLib, omics = omicsType,
+                              phenotype = ph$label, phenotype_id = analysisVar, phenotype_type = ph$type,
+                              samples_are = if(omicsType == "proc_scrna") "cells" else "donors", value = "level"))
+      .pathwayHeatmapSaveInput(inp)
+      .pathwayHeatmapWrite(inp)
+    }, error = function(e) paste0("RES-NO;", conditionMessage(e)))
 }
 
 

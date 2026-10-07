@@ -289,7 +289,8 @@ performGSEA <- function(funcLib = "kegg", rank.stat = "coef", fdr = 0.05, collap
     fgsea(pathways = libraryList,
           stats = ranks,
           minSize = minSize,
-          maxSize = 500)
+          maxSize = 500,
+          nproc = 4)   # 4 workers, not the default detectCores() - 2 (2026-10-05); results identical
   }, error = function(e){
     print(paste("Error in fgsea:", e$message))
     return(NULL)
@@ -1367,15 +1368,24 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
                               stringsAsFactors = FALSE))
 }
 
-# per-gene(Entrez) statistic for the ridgeline = mean T-stat across the gene's CpGs
+# per-gene(Entrez) statistic for the ridgeline = mean T-stat across the gene's CpGs.
+# Also, for the page's pathway gene table: Symbol, CpGs (measured), SigCpGs (sig != NS), BestP (lowest CpG p).
 .methylGeneStat <- function(degs, map){
   m <- merge(data.frame(cpg = degs$Feature, stat = as.numeric(degs$T_statistic),
+                        p   = if("P_value" %in% names(degs)) as.numeric(degs$P_value) else NA_real_,
+                        sig = if("sig" %in% names(degs)) as.character(degs$sig) else NA_character_,
                         stringsAsFactors = FALSE),
-             map[, c("cpg", "entrez")], by = "cpg")
+             map[, intersect(c("cpg", "entrez", "symbol"), colnames(map))], by = "cpg")
   m <- m[!is.na(m$stat) & !is.na(m$entrez), ]
+  m$entrez <- as.character(m$entrez)
   agg <- tapply(m$stat, m$entrez, mean)
-  data.frame(GeneID = as.character(names(agg)), GeneStat = as.numeric(agg),
-             stringsAsFactors = FALSE)
+  ids <- names(agg)
+  out <- data.frame(GeneID = as.character(ids), GeneStat = as.numeric(agg), stringsAsFactors = FALSE)
+  if("symbol" %in% colnames(m)) out$Symbol <- as.character(m$symbol[match(ids, m$entrez)])
+  out$CpGs <- as.integer(table(m$entrez)[ids])
+  if(!all(is.na(m$sig))) out$SigCpGs <- as.integer(tapply(m$sig != "NS", m$entrez, sum, na.rm = TRUE)[ids])
+  if(!all(is.na(m$p)))   out$BestP   <- as.numeric(suppressWarnings(tapply(m$p, m$entrez, min, na.rm = TRUE))[ids])
+  out
 }
 
 # write ridgeline.csv (same columns as the gene-level path) from a per-gene stat
@@ -1393,12 +1403,16 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
                    check.names = FALSE, stringsAsFactors = FALSE)
   genesPW <- merge(genesPW, rr, by = "Set ID", all.y = TRUE, all.x = FALSE)
   genesPW$Sig <- as.character(genesPW$`Adj P_value` < fdr)
-  genesPW <- merge(genesPW, geneStat, by = "GeneID", all.x = TRUE, all.y = FALSE)
+  genesPW <- merge(genesPW, geneStat[, c("GeneID", "GeneStat")], by = "GeneID", all.x = TRUE, all.y = FALSE)
   genesPW <- na.omit(genesPW)
   genesPW <- data.table::as.data.table(genesPW)
   genesPW <- genesPW[, .(GeneID, `Set Name`, `Set Size`, pathFDR = `Adj P_value`,
                          Sig, pathNegLogP, GeneStat,
                          MeanGeneStat = mean(GeneStat), RankSig), by = .(`Set ID`)]
+  extra <- intersect(c("Symbol", "CpGs", "SigCpGs", "BestP"), colnames(geneStat))   # pathway gene table (page)
+  if(length(extra)) genesPW <- merge(genesPW, data.table::as.data.table(geneStat[, c("GeneID", extra)]),
+                                     by = "GeneID", all.x = TRUE)
+  data.table::setcolorder(genesPW, c("Set ID", "GeneID"))                         # original column order first
   genesPW <- genesPW[order(MeanGeneStat)]
   write.csv(genesPW, "ridgeline.csv", row.names = FALSE)
 }
@@ -1418,7 +1432,7 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
   if(is.null(lib)) return(paste0("RES-NO; Library file not found for methylation GSEA: ", funcLib, ".rds"))
   libraryList <- lib$sets
 
-  degs <- data.table::fread("dea_results.csv", select = c("Feature", "P_value", "T_statistic"))
+  degs <- data.table::fread("dea_results.csv", select = c("Feature", "P_value", "T_statistic", "sig"))
   cpg.pval <- setNames(as.numeric(degs$P_value), degs$Feature)
   cpg.pval <- cpg.pval[!is.na(cpg.pval) & cpg.pval > 0]
   if(length(cpg.pval) < 100) return("RES-NO; too few CpG p-values for methylation GSEA")
@@ -1438,7 +1452,7 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
 
   # preranked GSEA via fgsea (scoreType='pos': the RRA statistic is non-negative)
   res <- tryCatch(
-    fgsea::fgsea(pathways = libraryList, stats = z, minSize = 15, maxSize = 500, scoreType = "pos"),
+    fgsea::fgsea(pathways = libraryList, stats = z, minSize = 15, maxSize = 500, scoreType = "pos", nproc = 4),
     error = function(e) paste0("ERROR:", conditionMessage(e)))
   if(is.character(res) && grepl("^ERROR:", res)) return(paste0("RES-NO; fgsea (methylation GSEA) failed: ", sub("^ERROR:", "", res)))
   res <- as.data.frame(res)
@@ -1542,7 +1556,7 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
   num.sig <- sum(out$`Adj P_value` < fdr, na.rm = TRUE)
 
   # ridgeline: per-gene mean T across the gene's CpGs (uses the full multi-gene map)
-  degs2 <- data.table::fread("dea_results.csv", select = c("Feature", "T_statistic"))
+  degs2 <- data.table::fread("dea_results.csv", select = c("Feature", "T_statistic", "P_value", "sig"))
   geneStat <- tryCatch(.methylGeneStat(degs2, map), error = function(e) NULL)
   if(!is.null(geneStat)) tryCatch(.writeMethylRidgeline(geneStat, libraryList, out, fdr),
                                   error = function(e) print(paste("methyl ORA ridgeline failed:", e$message)))
@@ -2233,11 +2247,11 @@ if(omicsType == "proc_methylation"){
   colnames(res.table)[5] <- "P_value"
   colnames(res.table)[6] <- "Adjusted p_value"
   
-  if(contrast != "anova"){
-    res.table[,2:6] <- signif(res.table[,2:6], digits = 3)
-  } else {
-    res.table[,3:6] <- signif(res.table[,3:6], digits = 3)
-  }
+  # FULL PRECISION IS KEPT (2026-10-06, user: "yes fix the source"). The numbers were rounded here to 3 significant digits
+  # (signif(res.table[,2:6], 3); 3:6 for anova), and every consumer inherited it: the GSEA ranks on the coefficient
+  # (performGSEA here, IsletAgent's kgEnrichment via the precompute, which stores this file), and 80.6% of the 20,892
+  # RNA-seq coefficients for diagnosis Type2-None were TIED, so the order of tied genes, and pathways near the cut-off,
+  # came from rounding. Display rounding belongs to the page (app.omics.component: 3 significant digits in the table).
   res.table <- res.table[order(res.table$P_value), ]
   res.table$sig <- rep("NS", dim(res.table)[1])
  
@@ -2431,7 +2445,7 @@ PatchseqSpearman <- function(
   colnames(res.table)[5] <- "Adjusted p_value"
   colnames(res.table)[6] <- "Gene_ID"
   colnames(res.table)[7] <- "Description"
-  res.table[,2:5] <- signif(res.table[,2:5], digits = 3)
+  # FULL PRECISION IS KEPT (2026-10-06), same as DonorRegression: no signif(res.table[,2:5], 3) here.
   res.table <- res.table[order(res.table$P_value), ]
   res.table$sig <- rep("NS", dim(res.table)[1])
 
@@ -3105,7 +3119,7 @@ clusterOmicsPathway <- function(omicsType, groupA, groupB, covariates = "", subs
     L <- tryCatch(.cluster_load_lib(lib), error = function(e) NULL)
     if(is.null(L) || !length(L$sets)) next
     minSize <- if(lib == "hsa_kegg") 3 else 15
-    fres <- tryCatch(fgsea(pathways = L$sets, stats = ranks, minSize = minSize, maxSize = 500),
+    fres <- tryCatch(fgsea(pathways = L$sets, stats = ranks, minSize = minSize, maxSize = 500, nproc = 4),
                      error = function(e) NULL)
     if(is.null(fres) || !nrow(fres)) next
     fres <- fres[!is.na(fres$pval) & !is.na(fres$NES) & !is.na(fres$padj), ]   # drop pathways with no computable stats

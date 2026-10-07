@@ -1799,6 +1799,25 @@ createEphysSet <- function(cell, glucose, info, all.info){
 
 ################################################################################
 
+# Feature view search keys. The API's character check (fixed rule) lets only [A-Za-z0-9.-_,]
+# through, so an ID with other characters (contaminant "PCB 156 + 157", protein "CBS;CBSL") is
+# sent as a key: every run of characters outside [A-Za-z0-9.-] -> "_", ends trimmed (same rule as
+# searchKey in app.feature.component.ts). A key maps back to the omics_outcomes IDs it is the key
+# of: index range on the part before the first "_", then an exact key match.
+searchKey <- function(x) gsub("^_+|_+$", "", gsub("[^A-Za-z0-9.-]+", "_", x))
+
+resolveSearchKeys <- function(mydb, ids){
+  keys <- ids[grepl("_", ids, fixed = TRUE)]
+  real <- unlist(lapply(keys, function(k){
+    pre <- sub("_.*$", "", k)
+    if (!nzchar(pre)) return(NULL)
+    cand <- dbGetQuery(mydb, "SELECT DISTINCT ID FROM omics_outcomes WHERE ID GLOB ?",
+                       params = list(paste0(pre, "*")))$ID
+    cand[searchKey(cand) == k]
+  }))
+  unique(as.character(real))
+}
+
 getSearchResults <- function(variable_ID, variable_type, contrast, version = "v1"){
 
   library(RSQLite)
@@ -1826,6 +1845,7 @@ getSearchResults <- function(variable_ID, variable_type, contrast, version = "v1
     ids <- trimws(strsplit(variable_ID, ",", fixed = TRUE)[[1]])
     ids <- ids[nzchar(ids)]
     if (length(ids) == 0) ids <- variable_ID  # safety: fall back to raw input
+    if (version == "v2") ids <- unique(c(ids, resolveSearchKeys(mydb, ids)))  # search keys -> real IDs
     placeholders <- paste(rep("?", length(ids)), collapse = ",")
     qry <- sprintf("SELECT * FROM omics_outcomes WHERE %s IN (%s)", col.id, placeholders)
     results <- dbGetQuery(mydb, qry, params = as.list(ids))

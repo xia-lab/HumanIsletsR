@@ -364,6 +364,12 @@
   fk <- rowSums(!is.na(mat)) >= 9
   mat <- mat[fk, , drop = FALSE]; info <- info[fk, , drop = FALSE]
   if(nrow(mat) == 0) return(NULL)
+  # limma-trend STOPS on a non-finite Amean ("covariate contains NA or infinite values"); limma's Amean is exactly
+  # rowMeans(na.rm = TRUE). Dropped HERE, on `mat` and `info` together, because the result below is built from them by
+  # position -- the 2026-09-29 DonorRegression fix filtered the fit, which would misalign this table.
+  fa <- is.finite(rowMeans(mat, na.rm = TRUE))
+  mat <- mat[fa, , drop = FALSE]; info <- info[fa, , drop = FALSE]
+  if(nrow(mat) == 0) return(NULL)
 
   # judged on `md` AFTER complete.cases and the contrast subset above -- the rows the fit sees.
   covs <- .kgVaryingCovs(md, setdiff(colnames(md), phenotype))
@@ -381,15 +387,17 @@
     }
     args[["levels"]] <- design
     cmat <- do.call(limma::makeContrasts, args)
-    fit <- limma::lmFit(mat, design, trend = TRUE, robust = TRUE)
-    fit <- limma::contrasts.fit(fit, cmat); fit <- limma::eBayes(fit)
+    # trend / robust are eBayes() arguments: given to lmFit() they were silently dropped (plain eBayes) -- the bug
+    # fixed in humanislets_statistics.R on 2026-09-29 (user 2026-10-05: "fix the limma in kg_common first")
+    fit <- limma::lmFit(mat, design)
+    fit <- limma::contrasts.fit(fit, cmat); fit <- limma::eBayes(fit, trend = TRUE, robust = TRUE)
     tt  <- limma::topTable(fit, number = Inf, sort.by = "none")
     eff <- if(identical(contrast, "anova")) rep(NA_real_, nrow(tt)) else tt$logFC
     eff.type <- "log2FC"
   } else {
     form   <- if(length(covs)) paste0("~ ", phenotype, " + ", paste(covs, collapse = " + ")) else paste0("~ ", phenotype)
     design <- stats::model.matrix(stats::as.formula(form), data = md)
-    fit <- limma::lmFit(mat, design, trend = TRUE, robust = TRUE); fit <- limma::eBayes(fit)
+    fit <- limma::lmFit(mat, design); fit <- limma::eBayes(fit, trend = TRUE, robust = TRUE)
     coef.nm <- if(phenotype %in% colnames(design)) phenotype else colnames(design)[2]
     tt  <- limma::topTable(fit, coef = coef.nm, number = Inf, sort.by = "none")
     eff <- tt$logFC; eff.type <- "coefficient"
@@ -480,8 +488,11 @@
   if(is.null(lib)) return(NULL)
   ranks <- ranks[!is.na(ranks) & is.finite(ranks)]
   if(length(ranks) < 10) return(NULL)
+  # ⚠ 4 WORKERS, NOT THE DEFAULT (user 2026-10-05: "change the default 14 to 4 core"). With no nproc, fgsea takes
+  # BiocParallel's default (detectCores() - 2 = 14 on a 16-core machine) for EVERY call. MEASURED: results identical with
+  # 14 and 4 workers (all pathways, p, adj p, NES; seed 42).
   res <- try(fgsea::fgsea(pathways = lib$sets, stats = ranks,
-                          minSize = .kgLibMinSize(library)), silent = TRUE)
+                          minSize = .kgLibMinSize(library), nproc = 4), silent = TRUE)
   if(inherits(res, "try-error") || is.null(res) || nrow(res) == 0) return(NULL)
   res <- as.data.frame(res)
   nm  <- if(!is.null(lib$term)) setNames(lib$term, names(lib$sets)) else NULL
@@ -827,6 +838,13 @@
 #    RES-NO-SUBSET on NULL.
 # -- COMPARISONS CARRY THE CALLER'S OWN THRESHOLD ("donors over 60", "a BMI over 30"); no cut-off is
 #    invented here.
+# -- A THRESHOLD IS IN REAL UNITS, SO IT IS COMPARED ON THE RAW TABLE (2026-10-07, user: "fix the HbA1c
+#    threshold"). MEASURED: metadata_sum_norm.csv stores 40 columns as log10 (hba1c 0.49-1.16) and 8 more
+#    transformed, while the number is the one the user wrote ("HbA1c above 6.5") -- "hba1c>6.5" kept 0 of
+#    560 donors (RES-NO; 71 on the real scale) and "hba1c<5.7" kept every one. The column is read from
+#    metadata_sum_raw.csv by record_id; the rows returned are still the caller's own frame. Columns stored
+#    raw (age, BMI, ...) are identical in both tables, so they keep exactly the same donors. A level (`=`)
+#    is unchanged.
 .kgDonorSubset <- function(m, subset){
   if(is.null(subset) || identical(subset, "all") || !nzchar(subset)) return(m)
   mm <- regmatches(subset, regexec("^\\s*([^><=]+?)\\s*(>=|<=|=|>|<)\\s*(.+?)\\s*$", subset))[[1]]
@@ -836,7 +854,13 @@
   if(identical(sop, "=")){
     keep <- as.character(m[[scol]]) == sval
   } else {
-    lhs <- suppressWarnings(as.numeric(as.character(m[[scol]])))
+    v <- m[[scol]]
+    if("record_id" %in% names(m)){
+      raw <- .kgLoadMetaFrame(TRUE)
+      if(!is.null(raw) && all(c("record_id", scol) %in% names(raw)))
+        v <- raw[[scol]][match(as.character(m[["record_id"]]), as.character(raw[["record_id"]]))]
+    }
+    lhs <- suppressWarnings(as.numeric(as.character(v)))
     rhs <- suppressWarnings(as.numeric(sval))
     if(all(is.na(lhs)) || is.na(rhs)) return(NULL)
     keep <- switch(sop, ">" = lhs > rhs, "<" = lhs < rhs,

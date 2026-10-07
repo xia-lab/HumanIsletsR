@@ -472,7 +472,8 @@ pathway_fgsea_test <- function(feature_ranks, gem_lib, feature_ids, is_flux) {
 
   set.seed(42)
   res <- fgsea(pathways = pathway_list, stats = feature_ranks,
-               minSize = 3, maxSize = 500)
+               minSize = 3, maxSize = 500,
+               nproc = 4)   # 4 workers, not the default detectCores() - 2 (2026-10-05); results identical
 
   if (nrow(res) == 0) {
     return(data.frame(id = character(), value = numeric(),

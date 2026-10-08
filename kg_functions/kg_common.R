@@ -70,7 +70,7 @@
 
 # ---- feature resolver (qs) ---------------------------------------------------
 .kgLoadFeatureResolver <- function(){
-  library(qs)
+  suppressPackageStartupMessages(library(qs))   # qs 0.27.3 prints an announcement on every attach
   .kgSetPaths()
   qs.path <- paste0(other.tables.path, "display_kg/kg_feature_resolver.qs")
   if(!file.exists(qs.path)) return(NULL)
@@ -671,8 +671,23 @@
   }
   if(sum(ok) < minN || length(unique(x[ok])) < 2) return(NULL)
 
+  # ⚠ A CATEGORICAL COVARIATE ENTERS AS 0/1 INDICATOR COLUMNS (user 2026-10-07, "yes prepare it, test locally first").
+  # `.kgCoerce` makes a text column (donorsex, ancestry) a factor, and ppcor::pcor.test takes numbers only — MEASURED:
+  # "'x' must be numeric", caught by the try() below, so a contaminant adjusted for sex came back with NO row. Each
+  # factor becomes indicator columns (the first level is the reference, `model.matrix`); numeric covariates go in
+  # unchanged. A covariate constant on these donors is dropped first (`.kgVaryingCovs`, as `.kgLmCell` does) — it
+  # carries nothing to adjust for and makes the partial correlation singular.
+  if(!is.null(cm)){
+    cmo <- cm[ok, , drop = FALSE]
+    cn  <- .kgVaryingCovs(cmo, colnames(cmo))
+    cm  <- if(length(cn)){
+      mm <- stats::model.matrix(stats::as.formula(paste0("~ ", paste(sprintf("`%s`", cn), collapse = " + "))),
+                                data = cmo[, cn, drop = FALSE])
+      mm[, colnames(mm) != "(Intercept)", drop = FALSE]
+    } else NULL
+  }
   use.pcor <- !is.null(cm) && requireNamespace("ppcor", quietly = TRUE)
-  r <- try(if(use.pcor) ppcor::pcor.test(yv[ok], x[ok], cm[ok, , drop = FALSE], method = "kendall")
+  r <- try(if(use.pcor) ppcor::pcor.test(yv[ok], x[ok], cm, method = "kendall")
            else         stats::cor.test(yv[ok], x[ok], method = "kendall", exact = FALSE),
            silent = TRUE)
   if(inherits(r, "try-error")) return(NULL)

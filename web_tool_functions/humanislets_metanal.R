@@ -876,12 +876,15 @@ getPheno_fun <- function (){
 require(jsonlite)
 filter <- read_json("pheno.json"); 
 filter = unlist(filter)
-filter = filter[filter=="FALSE"]
-rm = names(filter)
+# Subset = keep ONLY the ticked phenotypes. Every other phenotype column is removed too, so a
+# phenotype without a checkbox in the dialog can no longer stay in the analysis.
+keep = names(filter)[filter=="TRUE"]
+allpheno = setdiff(colnames(read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"), nrows = 1)), "record_id")
+rm = setdiff(allpheno, keep)
 saveRDS(rm,"rmphemo.rds")
 
    
-  res <- paste0(length(rm), "RES-OK");
+  res <- paste0(sum(filter=="FALSE"), "RES-OK");   # the message counts the phenotypes the user unticked
   
   return(res)
 }

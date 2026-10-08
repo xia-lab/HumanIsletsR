@@ -196,6 +196,7 @@ selected_omics <- unique(c(omics1, omics2, omics3))
 
 
 meta <- read.csv(paste0(other.tables.path, "display_data/metadata_sum_norm.csv"))
+  cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar); meta <- .fill_cluster_v2(meta, cv2lv)   # "cluster_v2.<level>": + predicted donors
   meta_full <- meta   # keep all columns for optional covariate adjustment
   # Inject cluster (or any proc_metadata-only) column if selected var is missing from the CSV
   if (!is.null(analysisVar) && !(analysisVar %in% colnames(meta))) {
@@ -1042,6 +1043,7 @@ kpList <- qs::qread( "omics_kpList.qs")
 
 
  meta<-read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"))
+ cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar); meta <- .fill_cluster_v2(meta, cv2lv)   # "cluster_v2.<level>": + predicted donors
   # Inject cluster (or any proc_metadata-only) column if selected var is missing from the CSV
   if (!is.null(analysisVar) && !(analysisVar %in% colnames(meta))) {
     library(RSQLite)
@@ -2408,6 +2410,7 @@ GetWGCNATrait <- function(
 
   # Load metadata
   meta <- read.csv(paste0(other.tables.path, "display_data/metadata_sum_norm.csv"), stringsAsFactors = FALSE)
+  cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar); meta <- .fill_cluster_v2(meta, cv2lv)   # "cluster_v2.<level>": + predicted donors
 
   # Inject cluster (or any proc_metadata-only) column if selected var is missing from the CSV
   if (!is.null(analysisVar) && !(analysisVar %in% colnames(meta))) {
@@ -3041,8 +3044,18 @@ GetMofaCircos <- function(base_path, combo, factor = "Factor1", topN = "15", don
   if (length(om) == 0)
     return(list(err = paste0("Module M", modn, " is a non-gene omics module; pathway enrichment applies to gene omics (RNA/protein) only.")))
   bg <- mods[mods$omics_source %in% om, , drop = FALSE]
-  list(hit_raw = hit$original_id, hit_om = hit$omics_source, hit_sym = hit$feature_name, hit_score = NULL,
-       bg_raw  = bg$original_id,  bg_om  = bg$omics_source,  bg_sym  = bg$feature_name,  bg_score = NULL)
+  # score = each gene's membership (kME) in THIS module (hub_features.csv); genes outside the module have none
+  # (NA) and drop out of the ridge plot ("Module membership"). Before: no score -> every gene 0 -> empty ridges.
+  kme <- rep(NA_real_, nrow(bg))
+  hfile <- file.path(base_path, "wgcna_combined_results", combo, "hub_features.csv")
+  if (file.exists(hfile)) {
+    hub <- read.csv(hfile, stringsAsFactors = FALSE)
+    hub <- hub[hub$module == modn, , drop = FALSE]
+    kme <- suppressWarnings(as.numeric(hub$kME))[match(bg$feature_id, hub$feature_id)]
+  }
+  list(hit_raw = hit$original_id, hit_om = hit$omics_source, hit_sym = hit$feature_name,
+       hit_score = kme[match(hit$feature_id, bg$feature_id)],
+       bg_raw  = bg$original_id,  bg_om  = bg$omics_source,  bg_sym  = bg$feature_name,  bg_score = kme)
 }
 
 # MOFA selection: top-N features per gene omics by |weight| on the factor
@@ -3082,7 +3095,7 @@ GetMofaCircos <- function(base_path, combo, factor = "Factor1", topN = "15", don
   hit_ent <- .pc_id_to_entrez(sel$hit_raw, sel$hit_om, sel$hit_sym)
   score <- if (!is.null(sel$bg_score) && length(sel$bg_score) == length(bg_ent))
     suppressWarnings(as.numeric(sel$bg_score)) else rep(0, length(bg_ent))
-  score[is.na(score)] <- 0
+  # NA = no score (WGCNA: gene outside the module) stays NA, so the ridge plot leaves it out; ORA uses sig only
   keep <- !is.na(bg_ent) & bg_ent != ""
   bg_ent <- bg_ent[keep]; score <- score[keep]
   ord <- order(-abs(score)); bg_ent <- bg_ent[ord]; score <- score[ord]   # dedup keeps max |score|
@@ -3253,6 +3266,7 @@ GetWGCNAEigengeneBox <- function(omicsType, moduleNum, analysisVar, class1, clas
   wgcna_dir <- paste0(other.tables.path, "multi_omics/wgcna_results/", omicsType, "/")
   eigen_df  <- read.csv(paste0(wgcna_dir, "eigengenes.csv"), row.names = 1, stringsAsFactors = FALSE)
   meta      <- read.csv(paste0(other.tables.path, "display_data/metadata_sum_norm.csv"), stringsAsFactors = FALSE)
+  cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar); meta <- .fill_cluster_v2(meta, cv2lv)   # "cluster_v2.<level>": + predicted donors
 
   # Inject cluster (or any proc_metadata-only) column if selected var is missing from the CSV
   if (!is.null(analysisVar) && !(analysisVar %in% colnames(meta))) {

@@ -260,7 +260,12 @@ if(version=="v2"){
 
                cluster = {
                 filt <- str_split(filter$cluster, ",")[[1]];
+                lv <- sub("^lv_", "", grep("^lv_", filt, value = TRUE)); filt <- grep("^lv_", filt, value = TRUE, invert = TRUE)
                 filt.list <- donor.table[(cluster_v2 %in% filt), record_id];   # the v2 clusters (C1-C4 = Cluster 1-4)
+                if(length(lv) == 1 && !is.null(.cluster_v2_level(paste0("cluster_v2.", lv)))){   # + predicted donors (Omics / Multi-omics pages)
+                  dc <- .cluster_v2_table()
+                  if(!is.null(dc)) filt.list <- union(filt.list, dc$donor_id[dc$source == "predicted" & dc$reliability %in% .cluster_v2_reliabilities(lv) & dc$cluster %in% filt])
+                }
                 donors <- intersect(donors, filt.list);
                },
 

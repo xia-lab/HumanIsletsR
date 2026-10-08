@@ -150,6 +150,11 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   .prim <- if("Pearson_p" %in% names(out) && any(!is.na(out$Pearson_p))) out$Pearson_p
            else out$Spearman_p
   out$P_family <- signif(stats::p.adjust(.prim, method = "BH"), 4)
+  # -- EACH METHOD HAS ITS OWN ADJUSTED p (2026-10-07, user: "why two method one adj"). `P_family` corrects only the
+  #    primary (Pearson) p, so a Spearman cell had nothing to be judged by. Same rule (BH) over the same pairs, one
+  #    column per method, appended so every existing column keeps its place; `P_family` is unchanged.
+  out$Pearson_adj  <- signif(stats::p.adjust(out$Pearson_p,  method = "BH"), 4)
+  out$Spearman_adj <- signif(stats::p.adjust(out$Spearman_p, method = "BH"), 4)
   out <- out[order(out$Pearson_p, na.last = TRUE), , drop = FALSE]
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
   utils::write.csv(out, paste0("kg_pheno_corr_", safe(cols_a[1]), "_",
@@ -241,6 +246,11 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   # that was not asked for. Same rule as `.kgPhenoCorrMany` above and `kg_corr.R`:255-259.
   .prim <- if(!is.na(out$Pearson_p[1])) out$Pearson_p else out$Spearman_p
   out$P_family <- signif(stats::p.adjust(.prim, method = "BH"), 4)
+  # -- EACH METHOD HAS ITS OWN ADJUSTED p (2026-10-07, user: "why two method one adj"). `P_family` corrects only the
+  #    primary (Pearson) p, so a Spearman cell had nothing to be judged by. Same rule (BH) over the same pairs, one
+  #    column per method, appended so every existing column keeps its place; `P_family` is unchanged.
+  out$Pearson_adj  <- signif(stats::p.adjust(out$Pearson_p,  method = "BH"), 4)
+  out$Spearman_adj <- signif(stats::p.adjust(out$Spearman_p, method = "BH"), 4)
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
   utils::write.csv(out, paste0("kg_pheno_corr_", safe(ca), "_", safe(cb), "_", ts, ".csv"), row.names = FALSE)
   utils::write.csv(out, "kg_pheno_corr.csv", row.names = FALSE)
@@ -313,6 +323,13 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 
   two <- length(glev) == 2
   rows <- vector("list", 0)
+  # -- THE BOX IS IN THE PHENOTYPE'S OWN UNITS (2026-10-07, user: "fix the HbA1c log10 numbers"). MEASURED live:
+  #    "Is donor sex associated with HbA1c?" returned `Female:0.5441,0.716,0.7482,...` -- log10(HbA1c %), because
+  #    metadata_sum_norm.csv stores 40 columns as log10 and 8 more transformed; with covariates the box was the
+  #    residuals. The five numbers are read from metadata_sum_raw.csv for the SAME donors (record_id); the test,
+  #    N, Statistic, P_value and Direction are computed exactly as before.
+  mraw <- if(tolower(use_raw) %in% c("true","1")) m else .kgLoadMetaFrame(TRUE)
+  raw_rid <- if(!is.null(mraw)) as.character(mraw[["record_id"]]) else character(0)
   for(pc in phen_cols){
     y <- suppressWarnings(as.numeric(m[[pc]][keep])); names(y) <- rid
     if(!is.null(cov.df)) y <- .kgResidualize(y, cov.df)
@@ -341,8 +358,10 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
     # -- FIVE NUMBERS PER LEVEL = A BOX (min, q1, median, q3, max), the same summary any box plot
     #    takes, so no donor-level payload has to travel: `C2:0.1,0.4,0.6,0.8,1.2|C0:...`, levels in
     #    the `Groups` order, one entry per level, `NA` where a level has no finite value.
+    yr <- if(!is.null(mraw) && pc %in% names(mraw))
+            suppressWarnings(as.numeric(as.character(mraw[[pc]][match(names(yy), raw_rid)]))) else yy
     bx <- vapply(glev, function(g){
-      v <- yy[gg == g]; v <- v[is.finite(v)]
+      v <- yr[gg == g]; v <- v[is.finite(v)]
       if(!length(v)) return(paste0(g, ":NA"))
       q <- stats::quantile(v, c(0, .25, .5, .75, 1), na.rm = TRUE, names = FALSE)
       paste0(g, ":", paste(signif(q, 4), collapse = ","))

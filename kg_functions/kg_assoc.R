@@ -284,14 +284,32 @@
   # `kg_assoc.csv`. Status `too_few_donors` = skipped at the `minN` gate, `tested` = went to the fit.
   lstat <- list()
   offered <- character(0)        # layers a staged spec offers but does not run (`.kgStagedLayers`)
-  .note_layer <- function(disp, dc, status = NULL){
+  # ⚠ A NAMED COMPARISON COUNTS ITS TWO GROUPS (user 2026-10-07, "1b"). The targeted fit (`.kgLmCell`) keeps only the
+  # donors at the two compared levels and returns nothing unless both are present and they number >= minN together
+  # (one-vs-rest: >= 3 in the named group first) -- so a layer could be "tested" on 218 donors and give no row.
+  # MEASURED on F2 "How does CPA1 change in type 1 diabetes, in high-purity preparations only?": RNA-seq 218 donors, 0
+  # with type 1 diabetes; the answer said "not measured in any layer". With `groups = TRUE` (the targeted engine only;
+  # limma has its own one-class guard) a discrete phenotype asked as a named contrast writes the donors at each level
+  # (`N_level`, `N_ref`), `N_usable` = the two together, and `too_few_donors` under exactly `.kgLmCell`'s conditions.
+  # Every other row is written as before, with `N_level` / `N_ref` NA.
+  .note_layer <- function(disp, dc, status = NULL, groups = FALSE){
     for(ph in phenos){
       v <- phframe[intersect(dc, rownames(phframe)), ph]
+      ok <- !is.na(v) & !(as.character(v) %in% c("", "NA"))
+      nu <- sum(ok); nl <- NA_integer_; nr <- NA_integer_
+      st <- if(!is.null(status)) status else if(length(dc) < minN) "too_few_donors" else "tested"
+      if(groups && nzchar(ct_lvl) && !identical(ct_lvl, "anova") && nzchar(ct_ref) && .kgPhenoType(m, ph) == "disc"){
+        vv <- as.character(v[ok])
+        nl <- sum(vv == ct_lvl)
+        nr <- if(identical(ct_ref, "rest")) sum(vv != ct_lvl) else sum(vv == ct_ref)
+        nu <- nl + nr
+        if(identical(st, "tested") && ((identical(ct_ref, "rest") && nl < 3) || nl == 0 || nr == 0 || nu < minN))
+          st <- "too_few_donors"
+      }
       lstat[[length(lstat)+1]] <<- data.frame(
         Layer = disp, Phenotype = ph, N_layer = length(dc),
-        N_usable = sum(!is.na(v) & !(as.character(v) %in% c("", "NA"))), MinN = minN,
-        Status = if(!is.null(status)) status else if(length(dc) < minN) "too_few_donors" else "tested",
-        Subset = subset_note, stringsAsFactors = FALSE)
+        N_usable = nu, MinN = minN, Status = st,
+        Subset = subset_note, N_level = nl, N_ref = nr, stringsAsFactors = FALSE)
     }
   }
   # ⚠ ONE CLASS IS A DATA CONDITION, NOT A CRASH. A donor subset can leave a discrete phenotype with
@@ -354,7 +372,7 @@
       read_vals <- unique(vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1)))
       FR <- .kgFeatureRows(con, la$table, la$read_col, read_vals, la$rowfilter); if(is.null(FR)) next
       dcommon <- intersect(colnames(FR$mat), keep_ids)
-      .note_layer(la$display, dcommon)
+      .note_layer(la$display, dcommon, groups = TRUE)
       if(length(dcommon) < minN) next
 
       # small-n entities (metabolite/contaminant) drop the DEFAULT covariates; an explicit
@@ -507,7 +525,7 @@
   utils::write.csv(if(length(lstat)) do.call(rbind, lstat) else
                      data.frame(Layer = character(0), Phenotype = character(0), N_layer = integer(0),
                                 N_usable = integer(0), MinN = integer(0), Status = character(0),
-                                Subset = character(0)),
+                                Subset = character(0), N_level = integer(0), N_ref = integer(0)),
                    "kg_assoc_layers.csv", row.names = FALSE)
 
   # ⚠ "NOTHING TO COMPARE" IS NOT "COMPARED AND FOUND NOTHING". A bare RES-NO means the test RAN and

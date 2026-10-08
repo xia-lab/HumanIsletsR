@@ -341,6 +341,7 @@ metaplot_fun = function(meta, x.label, imgNm) {   # x.label is not used: the tit
 
   con2 <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   meta <- dbGetQuery(con2, "SELECT * FROM proc_metadata"); try(dbDisconnect(con2), silent = TRUE)
+  cv2lv <- .cluster_v2_level(meta.var); meta.var <- .cluster_v2_base(meta.var); meta <- .fill_cluster_v2(meta, cv2lv)
   mv <- meta[[meta.var]][match(donorcol, meta$record_id)]
   mv[mv == "NA" | mv == ""] <- NA
   mv <- suppressWarnings(as.numeric(mv))
@@ -361,6 +362,7 @@ metaplot_fun = function(meta, x.label, imgNm) {   # x.label is not used: the tit
 }
 
 plotOmicsFeature <- function(gene.id, meta.var, omics.type, donors = "all", cell, glucose, batch = NULL, peakmode = NULL, metabo.gluc = NULL, version, mode="tool"){
+  cv2lv <- .cluster_v2_level(meta.var)   # "cluster_v2.<level>": + predicted donors (the region profile resolves it itself)
 
   library(RSQLite)
   library(dplyr)
@@ -578,12 +580,17 @@ print(c(gene.id, meta.var, omics.type,version))
     mydb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
     query <- paste0("SELECT * FROM ", meta.table)
     metadata <- dbGetQuery(mydb, query)
+    if(!is.null(cv2lv)){ meta.var <- "cluster_v2"; metadata <- .fill_cluster_v2(metadata, cv2lv) }
 
     # filter by cell and glucose if relevant
-    if(grepl("_donor", meta.var)){
+    if(grepl("_donor", meta.var)){   # ephys_donor has one row per donor x cell type x glucose: keep the requested glucose too
         metadata <- metadata[metadata$cell_type == cell, ]
-    } else if(omics.type == "proc_scrna"){
-        metadata <- metadata[metadata$cell_type == cell & metadata$glucose_mM == glucose, ]
+        if(!is.na(suppressWarnings(as.numeric(glucose))))
+            metadata <- metadata[as.character(as.numeric(metadata[["glucose_mM"]])) == as.character(as.numeric(glucose)), ]
+    } else if(omics.type == "proc_scrna"){   # ephys_cell names the glucose column glucose_mM_cell (values 1.0 / 5.0 / 10.0)
+        gcol <- intersect(c("glucose_mM", "glucose_mM_cell"), colnames(metadata))[1]
+        metadata <- metadata[metadata$cell_type == cell &
+                             as.character(as.numeric(metadata[[gcol]])) == as.character(as.numeric(glucose)), ]
     }
 
     query <- paste0("SELECT * FROM proc_variable_summary WHERE column='", meta.var, "'")
@@ -940,18 +947,49 @@ plotExpressionByCell <- function(gene.id, display = FALSE){
        file = "savedAnalysis/plotPathwayHeatmap.R")
 }
 
+# Precomputed WGCNA / MOFA (Multi-omics view): donors ordered by the module eigengene or the factor score instead of
+# a phenotype. analysisVar = "PCWGCNA.<combo>.<module>" (eigengenes.csv, column ME<module>) or
+# "PCMOFA.<combo>.<factor>" (factors.csv, column <factor>); the values are those of the precomputed model.
+.pathwayPcScore <- function(analysisVar, sample.ids){
+  p <- strsplit(analysisVar, ".", fixed = TRUE)[[1]]
+  if(length(p) != 3) stop("Unrecognised module / factor: ", analysisVar)
+  base <- paste0(other.tables.path, "processed_comprehensive/")
+  if(p[1] == "PCWGCNA"){
+    f <- file.path(base, "wgcna_combined_results", p[2], "eigengenes.csv")
+    if(!file.exists(f)) stop("WGCNA eigengenes not found for ", p[2])
+    d <- read.csv(f, check.names = FALSE, stringsAsFactors = FALSE)
+    col <- paste0("ME", p[3]); ids <- as.character(d[[1]]); lab <- paste0("Module M", p[3], " eigengene")
+  } else {
+    f <- file.path(base, "mofa_results", p[2], "factors.csv")
+    if(!file.exists(f)) stop("MOFA factors not found for ", p[2])
+    d <- read.csv(f, check.names = FALSE, stringsAsFactors = FALSE)
+    col <- p[3]; ids <- as.character(d[["donor"]]); lab <- paste0(sub("^Factor", "Factor ", p[3]), " score")
+  }
+  if(!(col %in% colnames(d))) stop(col, " was not found for ", p[2])
+  v <- suppressWarnings(as.numeric(d[[col]]))
+  keep <- !is.na(v) & ids %in% sample.ids & !duplicated(ids)
+  ids <- ids[keep]; v <- v[keep]; o <- order(v)
+  if(length(ids) == 0) stop("No donors have both this score and these data")
+  list(samples = ids[o], display = round(v[o], 4), type = "cont", label = lab)
+}
+
 # phenotype + samples shared by both heatmap functions; returns list(samples, pheno, display, info)
 .pathwayPhenotype <- function(analysisVar, meta.table, id.col, sample.ids, donors, cell = NULL, glucose = NULL, scrna = FALSE){
+  if(grepl("^PC(WGCNA|MOFA)[.]", analysisVar)) return(.pathwayPcScore(analysisVar, sample.ids))
+  cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar)   # "cluster_v2.<level>": + predicted donors
   tdb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   metadata  <- dbGetQuery(tdb, paste0("SELECT * FROM ", meta.table))
+  metadata <- .fill_cluster_v2(metadata, cv2lv)
   meta.info <- dbGetQuery(tdb, "SELECT * FROM proc_variable_summary WHERE column = ?", params = list(analysisVar))
   dbDisconnect(tdb)
   if(nrow(meta.info) == 0 && analysisVar %in% c("tc_weight_recovery", "tg_weight_recovery", "fc_weight_recovery", "ce"))
     meta.info <- data.frame(column = analysisVar, type = "cont", stringsAsFactors = FALSE)
   if(!(analysisVar %in% colnames(metadata))) stop("The phenotype ", analysisVar, " was not found")
   meta.type <- if(nrow(meta.info)) meta.info$type[1] else "cont"
-  if(grepl("_donor", analysisVar)){
+  if(grepl("_donor", analysisVar)){   # ephys_donor has one row per donor x cell type x glucose: keep the requested glucose too
     metadata <- metadata[metadata$cell_type == cell, ]
+    if(!is.null(glucose) && !is.na(suppressWarnings(as.numeric(glucose))))
+      metadata <- metadata[as.character(as.numeric(metadata[["glucose_mM"]])) == as.character(as.numeric(glucose)), ]
   } else if(scrna){   # ephys_cell names the glucose column glucose_mM_cell (values 1.0 / 5.0 / 10.0)
     gcol <- intersect(c("glucose_mM", "glucose_mM_cell"), colnames(metadata))[1]
     metadata <- metadata[metadata$cell_type == cell &
@@ -960,6 +998,13 @@ plotExpressionByCell <- function(gene.id, display = FALSE){
   if(donors == "subset" && file.exists("donors.rds")){
     metadata <- metadata[metadata$record_id %in% readRDS("donors.rds"), ]
     if(nrow(metadata) < 10) stop("Fewer than 10 samples in the selected donor subset")
+  }
+  # a two-group comparison (DonorRegression, analysis_groups.rds): only the donors of those groups. Used only when
+  # the session's dea_results.csv is that analysis's (it has P_value; Multi-omics writes its own file without it).
+  if(meta.type != "cont" && file.exists("analysis_groups.rds") && file.exists("dea_results.csv") &&
+     "P_value" %in% colnames(data.table::fread("dea_results.csv", nrows = 0))){
+    ag <- readRDS("analysis_groups.rds")
+    if(identical(ag$analysisVar, analysisVar)) metadata <- metadata[as.character(metadata[[analysisVar]]) %in% ag$groups, ]
   }
   s.id <- as.character(metadata[[id.col]]); ph <- metadata[[analysisVar]]
   if(meta.type == "cont") ph <- suppressWarnings(as.numeric(ph))
@@ -1003,7 +1048,7 @@ plotExpressionByCell <- function(gene.id, display = FALSE){
     inp <- list(mat = m[, ph$samples, drop = FALSE], samples = ph$samples, label = rownames(m), feature = rownames(m),
                 sig = sig, pheno = ph$display,
                 meta = list(set_id = pw$id, set_name = pw$name, library = funcLib, omics = "proc_methylation",
-                            phenotype = ph$label, phenotype_id = analysisVar, phenotype_type = ph$type,
+                            phenotype = ph$label, phenotype_id = .cluster_v2_base(analysisVar), phenotype_type = ph$type,
                             samples_are = "donors", value = "mean beta of the gene's CpGs"))
     .pathwayHeatmapSaveInput(inp)
     .pathwayHeatmapWrite(inp)
@@ -1037,6 +1082,8 @@ plotPathwayHeatmap <- function(pathName, funcLib, analysisVar, omicsType, varGro
         fid <- lab[rows]; label <- lab[rows]; gid <- gid[rows]
         meta.table <- "ephys_cell"; id.col <- "cell_id"
       } else {
+        if(omicsType %in% c("proc_contaminants", "proc_flux"))
+          stop("This data type has no genes, so a gene-set heatmap cannot be drawn for it")
         table.nm <- if(omicsType == "proc_pbrna") paste0(omicsType, "_", cell) else
                     if(omicsType == "proc_metabolite"){
                       base_nm  <- if(!is.null(batch) && batch == "combat") "proc_metabolite_combat" else "proc_metabolite"
@@ -1077,7 +1124,7 @@ plotPathwayHeatmap <- function(pathName, funcLib, analysisVar, omicsType, varGro
       inp <- list(mat = m[, ph$samples, drop = FALSE], samples = ph$samples, label = label, feature = fid,
                   sig = .pathwaySigFlags(fid, gid), pheno = ph$display,
                   meta = list(set_id = pw$id, set_name = pw$name, library = funcLib, omics = omicsType,
-                              phenotype = ph$label, phenotype_id = analysisVar, phenotype_type = ph$type,
+                              phenotype = ph$label, phenotype_id = .cluster_v2_base(analysisVar), phenotype_type = ph$type,
                               samples_are = if(omicsType == "proc_scrna") "cells" else "donors", value = "level"))
       .pathwayHeatmapSaveInput(inp)
       .pathwayHeatmapWrite(inp)

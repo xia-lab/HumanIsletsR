@@ -842,7 +842,7 @@ performCAMERA <- function(funcLib = "gem_react", fdr = 0.05, mode = "local") {
 performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
                              instrument = 10, mode = "local"){
 
-  library(qs)
+  suppressPackageStartupMessages(library(qs))   # qs 0.27.3 prints an announcement on every attach
   library(data.table)
 
   fdr <- as.numeric(fdr)
@@ -1649,6 +1649,7 @@ print(c( LOD_corrected,tissueType,contamClass))
   #  print(c(metaboGluc,"metaboGluc"))
 #  print(c(varGroup,analysisVar,omicsType,batch,peakmode,metaboGluc,mode))
   #mode = "tool";
+  cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar)   # "cluster_v2.<level>": + predicted donors
   if(length(contrast) == 0){contrast = 'NULL'}
    
   # load libraries
@@ -1846,6 +1847,7 @@ if(omicsType == "proc_methylation"){
    }else {
     metadata <- dbReadTable(mydb, "proc_metadata")
   }
+  metadata <- .fill_cluster_v2(metadata, cv2lv)
   meta.info <- dbReadTable(mydb, "proc_variable_summary")
   dbDisconnect(mydb)
 
@@ -1874,7 +1876,7 @@ if(omicsType == "proc_methylation"){
      rcmd <- gsub("tool","local",rcmd)
      write(rcmd, file = "savedAnalysis/Rhistory.R", append = TRUE);
      if(!file.exists("savedAnalysis/DonorRegression.R")){
-       dump( "DonorRegression", file = "savedAnalysis/DonorRegression.R",append=T)
+       dump(c("DonorRegression", ".cluster_v2_level", ".cluster_v2_base", ".cluster_v2_reliabilities", ".cluster_v2_table", ".fill_cluster_v2"), file = "savedAnalysis/DonorRegression.R",append=T)
        
      }
    }
@@ -1958,6 +1960,12 @@ if(omicsType == "proc_methylation"){
     metadata <- metadata[metadata[,analysisVar] %in% c(ref, contrast), ]
     feature_table <- feature_table[,colnames(feature_table) %in% metadata$record_id]
     meta.cand <- meta.cand[meta.cand[,analysisVar] %in% c(ref, contrast), ]
+  }
+  # the compared groups, for the pathway heatmap (plotPathwayHeatmap shows only these donors)
+  if(analysis.type == "disc" && contrast != "anova"){
+    saveRDS(list(analysisVar = analysisVar, groups = c(ref, contrast)), "analysis_groups.rds")
+  } else if(file.exists("analysis_groups.rds")){
+    file.remove("analysis_groups.rds")
   }
 
   # check if there are enough samples
@@ -2809,12 +2817,16 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   meta <- merge(meta, pheno[, c("sample_id", splitVar)], by.x = "donor_id", by.y = "sample_id")
   if(splitVar %in% c("diagnosis","diagnosis_computed")){ vv <- as.character(meta[[splitVar]]); vv[is.na(vv) | vv == ""] <- "none"; meta[[splitVar]] <- vv }
 
-  # optional numeric covariates: merge from all_features and stage as .cov1, .cov2, ...
+  # optional covariates: merge from all_features and stage as .cov1, .cov2, ... (numeric, or categorical when the values are not numbers)
   covs <- if(nzchar(covariates)) setdiff(strsplit(covariates, ";")[[1]], splitVar) else character(0)
   covs <- intersect(covs, colnames(pheno)); covCols <- character(0)
   if(length(covs)){
     meta <- merge(meta, pheno[, c("sample_id", covs)], by.x = "donor_id", by.y = "sample_id")
-    for(i in seq_along(covs)){ cn <- paste0(".cov", i); meta[[cn]] <- suppressWarnings(as.numeric(meta[[covs[i]]])); covCols <- c(covCols, cn) }
+    for(i in seq_along(covs)){
+      cn <- paste0(".cov", i); num <- suppressWarnings(as.numeric(meta[[covs[i]]]))
+      meta[[cn]] <- if(all(is.na(num))) factor(as.character(meta[[covs[i]]])) else num   # e.g. sex, diagnosis: categorical
+      covCols <- c(covCols, cn)
+    }
   }
 
   if(sourceFilter == "omics")         meta <- meta[meta$source == "omics", ]
@@ -2840,6 +2852,11 @@ compareWithinOmics <- function(omicsType, clusterNum, splitVar, splitMode = "num
   if(length(covCols)){
     ok <- stats::complete.cases(meta[, covCols, drop = FALSE]); meta <- meta[ok, , drop = FALSE]
     if(nrow(meta) < 6) return("RES-NO; too few donors with the covariate(s) measured")
+    varies <- vapply(covCols, function(cn) length(unique(as.character(meta[[cn]]))) > 1, logical(1))
+    if(!all(varies)){
+      covCols <- covCols[varies]
+      form <- as.formula(paste0("~ ", if(coefName == ".x") ".x" else ".grp", if(length(covCols)) paste0(" + ", paste(covCols, collapse = " + ")) else ""))
+    }
     if(splitMode == "cat" && (sum(meta$.grp == "A") < 3 || sum(meta$.grp == "B") < 3)) return("RES-NO; not enough donors per group after covariate filtering")
   }
   expr <- expr[, meta$donor_id, drop = FALSE]
@@ -3041,7 +3058,11 @@ clusterOmicsFeature <- function(omicsType, feature) {
   covs <- intersect(covs, colnames(pheno)); covCols <- character(0)
   if(length(covs)){
     meta <- merge(meta, pheno[, c("sample_id", covs)], by.x = "donor_id", by.y = "sample_id")
-    for(i in seq_along(covs)){ cn <- paste0(".cov", i); meta[[cn]] <- suppressWarnings(as.numeric(meta[[covs[i]]])); covCols <- c(covCols, cn) }
+    for(i in seq_along(covs)){
+      cn <- paste0(".cov", i); num <- suppressWarnings(as.numeric(meta[[covs[i]]]))
+      meta[[cn]] <- if(all(is.na(num))) factor(as.character(meta[[covs[i]]])) else num   # e.g. sex, diagnosis: categorical
+      covCols <- c(covCols, cn)
+    }
   }
 
   if(sourceFilter == "omics")         meta <- meta[meta$source == "omics", ]
@@ -3067,6 +3088,11 @@ clusterOmicsFeature <- function(omicsType, feature) {
   if(length(covCols)){
     ok <- stats::complete.cases(meta[, covCols, drop = FALSE]); meta <- meta[ok, , drop = FALSE]
     if(nrow(meta) < 6) return("RES-NO; too few donors with the covariate(s) measured")
+    varies <- vapply(covCols, function(cn) length(unique(as.character(meta[[cn]]))) > 1, logical(1))
+    if(!all(varies)){
+      covCols <- covCols[varies]
+      form <- as.formula(paste0("~ ", if(coefName == ".x") ".x" else ".grp", if(length(covCols)) paste0(" + ", paste(covCols, collapse = " + ")) else ""))
+    }
     if(splitMode == "cat" && (sum(meta$.grp == "A") < 3 || sum(meta$.grp == "B") < 3)) return("RES-NO; not enough donors per group after covariate filtering")
   }
   expr <- expr[, meta$donor_id, drop = FALSE]

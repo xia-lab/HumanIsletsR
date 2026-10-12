@@ -1659,7 +1659,8 @@ print(c( LOD_corrected,tissueType,contamClass))
 
   # process inputs
   pvalThresh <- as.numeric(pvalThresh)
-  if(fixedEffects == "NA"){
+  # "NA", "NULL" or "" = no covariates ("NULL" used to fail with "undefined columns selected").
+  if(length(fixedEffects) == 0 || fixedEffects[1] %in% c("NA", "NULL", "")){
     fixedEffects <- NULL
   } else {
     # Accept either "," or ";" as the covariate separator. Historically this
@@ -1946,6 +1947,11 @@ if(omicsType == "proc_methylation"){
   feature.keep <- rowSums(!is.na(feature_table)) >= 9
   feature_table <- feature_table[feature.keep, ]
   feature_info <- feature_info[feature.keep, ]
+ } else {
+  # metabolites: at least 5 donors with a value per compound (2026-10-12)
+  feature.keep <- rowSums(!is.na(feature_table)) >= 5
+  feature_table <- feature_table[feature.keep, , drop = FALSE]
+  feature_info <- feature_info[feature.keep, , drop = FALSE]
  }
   # filter by donors
   if(donors == "subset"){
@@ -1999,8 +2005,36 @@ if(omicsType == "proc_methylation"){
         paste0("Only ", n.samps, " of ", nrow(meta.cand),
                " donors have a value for every selected variable (at least 5 are needed)."), 5))
     }
+    # ANOVA: at least 5 donors in EVERY group, the same rule as the two-group comparison above (2026-10-11)
+    if(analysis.type == "disc" && contrast == "anova"){
+      grp.n <- table(as.character(metadata[,analysisVar]))
+      small <- names(grp.n)[grp.n < 5]
+      if(length(small) > 0){
+        return(.explainMissingVars(meta.cand[meta.cand[,analysisVar] %in% small, , drop = FALSE],
+          all.vars, analysisVar, meta.info,
+          paste0(paste0("Only ", as.integer(grp.n[small]), " of ",
+                        vapply(small, function(g) sum(meta.cand[,analysisVar] == g, na.rm = TRUE), integer(1)),
+                        " donors in group '", small, "'", collapse = "; "),
+                 " have a value for every selected variable (at least 5 per group are needed)."), 5))
+      }
+    }
   }
-  
+
+  # Each feature: at least 5 donors WITH A VALUE in every group (2026-10-11). The 9-donor check above counts all
+  # groups together, so a feature missing in many donors (pseudobulk) could still be tested on 1 donor per group.
+  if(analysis.type == "disc"){
+    grp.f   <- as.character(metadata[match(colnames(feature_table), metadata$record_id), analysisVar])
+    has.val <- !is.na(as.matrix(feature_table))
+    n.min   <- do.call(pmin, lapply(unique(grp.f), function(g) rowSums(has.val[, grp.f == g, drop = FALSE])))
+    rm(has.val)
+    feature.keep <- n.min >= 5
+    if(!any(feature.keep)){
+      return("RES-NO; No feature has at least 5 donors with a value in every group.")
+    }
+    feature_table <- feature_table[feature.keep, , drop = FALSE]
+    feature_info  <- feature_info[feature.keep, , drop = FALSE]
+  }
+
   # perform analysis
   # ---- Kendall rank correlation branch for environmental contaminants -----
   # Small sample sizes and non-normal abundance distributions make limma's
@@ -2042,6 +2076,14 @@ if(omicsType == "proc_methylation"){
       # never reaches contaminants — proc_contaminants is handled in its own branch above).
       cov.names <- setdiff(all.vars, analysisVar)
       cov.mat   <- if(length(cov.names) > 0) as.data.frame(metadata[, cov.names, drop = FALSE]) else NULL
+      # pcor.test needs a numeric matrix: a text covariate (donorsex, diagnosis_computed) made it fail
+      # with "'x' must be numeric" for every chemical, so every row was dropped and the page reported
+      # 0 chemicals. Expand text covariates to 0/1 columns (as the limma design does); a covariate with
+      # a single value adjusts nothing and would stop model.matrix, so it is skipped.
+      if(!is.null(cov.mat)){
+        cov.mat <- cov.mat[, vapply(cov.mat, function(v) length(unique(v[!is.na(v)])) > 1, logical(1)), drop = FALSE]
+        cov.mat <- if(ncol(cov.mat) > 0) model.matrix(~ ., model.frame(~ ., cov.mat, na.action = na.pass))[, -1, drop = FALSE] else NULL
+      }
       use.pcor  <- !is.null(cov.mat) && requireNamespace("ppcor", quietly = TRUE)
 
       tau.pval <- apply(feature_mat, 1, function(y){
@@ -2526,8 +2568,8 @@ convert_gpr_to_r <- function(rule, present_genes) {
 ##   covariates     : semicolon-separated phenotype column names ("" = none -> Welch)
 ##   subsetKey      : "" = all donors; else reads donors_<subsetKey>.rds written by the app-filter phenotype filter
 ##   sourceFilter   : "omics" | "predicted" | "pred_high" | "pred_high_med"; anything else ("pred_all") = all donors
-## Predictor rule (v2 clusters): phenotypes listed in predictor_phenotypes.csv (the assays the cluster prediction used)
-## are compared in omics donors only, never in predicted donors, whose cluster was predicted from those values.
+## Every phenotype uses the selected donor set (user 2026-10-09); the page labels the phenotypes the cluster prediction
+## used ("used for prediction") so users know a result that includes predicted donors may be circular.
 ## ============================================================================
 compareClusterPhenotypes <- function(groupA, groupB, covariates = "", subsetKey = "",
                                   sourceFilter = "all", fdr = "true", pvalThresh = "0.05") {
@@ -2544,8 +2586,6 @@ compareClusterPhenotypes <- function(groupA, groupB, covariates = "", subsetKey 
   clusters$donor_id <- as.character(clusters$donor_id)
   pheno$sample_id <- as.character(pheno$sample_id)
   meta <- merge(clusters[, c("donor_id","cluster_num","source","reliability")], pheno, by.x = "donor_id", by.y = "sample_id")
-  pfile <- paste0(deliv, "predictor_phenotypes.csv")
-  pred.cols <- if(file.exists(pfile)) as.character(read.csv(pfile, stringsAsFactors = FALSE)$phenotype_column) else character(0)
 
   if(sourceFilter == "omics")         meta <- meta[meta$source == "omics", ]
   if(sourceFilter == "predicted")     meta <- meta[meta$source == "predicted", ]
@@ -2589,11 +2629,9 @@ compareClusterPhenotypes <- function(groupA, groupB, covariates = "", subsetKey 
   for(i in seq_len(nrow(featdef))){
     nm <- featdef$name[i]; ty <- featdef$type[i]
     if(!(nm %in% colnames(meta)) || nm %in% covs) next
-    omics.only <- nm %in% pred.cols                  # predictor rule: omics donors only
 
     if(ty == "categorical"){
       v <- as.character(meta[[nm]]); ok <- !is.na(v) & v != "" & v != "NA"
-      if(omics.only) ok <- ok & meta$source == "omics"
       if(sum(ok) < 10) next
       tab <- table(meta$.grp[ok], v[ok])
       if(nrow(tab) < 2 || ncol(tab) < 2 || any(rowSums(tab) == 0)) next
@@ -2607,7 +2645,6 @@ compareClusterPhenotypes <- function(groupA, groupB, covariates = "", subsetKey 
         n_A = sum(meta$.grp[ok] == "A"), n_B = sum(meta$.grp[ok] == "B"), stringsAsFactors = FALSE)
     } else {
       y <- suppressWarnings(as.numeric(meta[[nm]]))
-      if(omics.only) y[meta$source != "omics"] <- NA
       ok <- !is.na(y)
       yA <- y[ok & meta$.grp == "A"]; yB <- y[ok & meta$.grp == "B"]
       mA <- if(length(yA)) mean(yA) else NA_real_; mB <- if(length(yB)) mean(yB) else NA_real_

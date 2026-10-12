@@ -3455,7 +3455,8 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
   pheno_path <- file.path(base_path, "phenotype", pheno_file)
   if (!file.exists(pheno_path)) return(NULL)
 
-  pheno <- read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE)
+  cv2lv <- .cluster_v2_level(sub(",.*", "", traits)); traits <- sub("^cluster_v2[.](high|highmed|all)", "cluster_v2", traits)   # Multi-omics cluster: "+ predicted" level
+  pheno <- .cluster_v2_pheno(read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE), cv2lv)
   if (traits == "NULL" || traits == "") traits <- "donorage"
   trait <- strsplit(traits, ",")[[1]][1]
 
@@ -3609,6 +3610,19 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
                      method, "/", combo)), auto_unbox = TRUE))
   }
   pcorr <- read.csv(pcorr_path, stringsAsFactors = FALSE, check.names = FALSE)
+  # Multi-omics cluster "Include": traits may carry "cluster_v2.<level>". The file holds cluster_v2 (omics donors only)
+  # plus cluster_v2.high / .highmed / .all rows; keep the chosen level's rows, named cluster_v2, and drop the others.
+  cv2lv <- NULL
+  if (traits != "NULL" && traits != "") {
+    tr <- trimws(strsplit(traits, ",", fixed = TRUE)[[1]])
+    lv <- unlist(lapply(tr, .cluster_v2_level)); if (length(lv)) cv2lv <- lv[1]
+    traits <- paste(vapply(tr, .cluster_v2_base, ""), collapse = ",")
+  }
+  if (!is.null(cv2lv) && any(pcorr$phenotype == paste0("cluster_v2.", cv2lv))) {
+    pcorr <- pcorr[pcorr$phenotype != "cluster_v2", , drop = FALSE]
+    pcorr$phenotype[pcorr$phenotype == paste0("cluster_v2.", cv2lv)] <- "cluster_v2"
+  }
+  pcorr <- pcorr[!grepl("^cluster_v2[.]", pcorr$phenotype), , drop = FALSE]
 
   # When a multi-omics donor subset is active, recompute every (score, phenotype)
   # stat live from the scores + phenotype CSVs instead of returning the
@@ -3618,7 +3632,7 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
   # recomputed on the subset.
   if (identical(donors, "subset") && file.exists("donors_multiomics.rds")) {
     return(.pc_overview_heatmap_subset(base_path, method, combo, category,
-                                       traits, pcorr))
+                                       traits, pcorr, cv2lv))
   }
 
   # Resolve which phenotype columns to render.
@@ -3648,7 +3662,7 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
     }
     pheno_cols <- setdiff(
       colnames(read.csv(pheno_path, nrow = 1, check.names = FALSE)),
-      "sample_id")
+      c("sample_id", "cluster_v2_source", "cluster_v2_reliability"))
   }
 
   pcorr <- pcorr[pcorr$phenotype %in% pheno_cols, , drop = FALSE]
@@ -3749,7 +3763,7 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
 #   numeric, binary_categorical  -> pearson  (signed)
 #   multilevel_categorical        -> anova_eta = sqrt(eta^2)   (unsigned 0..1)
 .pc_overview_heatmap_subset <- function(base_path, method, combo, category,
-                                        traits, pcorr) {
+                                        traits, pcorr, cv2lv = NULL) {
   # ---- load scores (eigengenes for WGCNA, factors for MOFA) ----
   if (method == "wgcna") {
     scores_path <- file.path(base_path, "wgcna_combined_results", combo, "eigengenes.csv")
@@ -3798,7 +3812,7 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
       error = paste0("phenotype file not found: ", pheno_file)),
       auto_unbox = TRUE))
   }
-  pheno <- read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE)
+  pheno <- .cluster_v2_pheno(read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE), cv2lv)   # Multi-omics cluster: donors of the "Include" choice
   if (is.null(pheno_cols)) {
     pheno_cols <- setdiff(colnames(pheno), "sample_id")
   } else {
@@ -3818,6 +3832,13 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
   }
 
   # ---- restrict donors to the subset, then to the score×pheno overlap ----
+  # Compute EVERY phenotype of the analysis (the precomputed file's list) on the subset, so the adjustment below is the
+  # same as the stored values; only the displayed phenotypes are returned (the display never changes a number).
+  if (pheno_file != "all_features.csv")
+    pheno <- .cluster_v2_pheno(read.csv(file.path(base_path, "phenotype", "all_features.csv"),
+                                        stringsAsFactors = FALSE, check.names = FALSE), cv2lv)
+  disp_cols  <- pheno_cols
+  pheno_cols <- unique(c(disp_cols, intersect(unique(pcorr$phenotype), setdiff(colnames(pheno), "sample_id"))))
   common <- intersect(donor_ids, pheno$sample_id)
   common <- .apply_multiomics_subset(common, "subset")
   if (length(common) < 5) {
@@ -3856,11 +3877,15 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
     y_raw <- pheno_sub[[pn]]
     if (chosen == "pearson") {
       # numeric or binary (binary already encoded 0/1 in features_*.csv)
-      y_num <- suppressWarnings(as.numeric(y_raw))
+      # numeric, or a two-group phenotype coded 0/1 exactly as the pipelines (alphabetical factor levels)
+      y_num <- if (ptype == "binary_categorical") {
+        fy <- factor(y_raw); fy[fy %in% c("", "NA")] <- NA; fy <- droplevels(fy)
+        if (nlevels(fy) == 2) as.numeric(fy) - 1 else rep(NA_real_, length(y_raw))
+      } else suppressWarnings(as.numeric(y_raw))
       for (i in seq_along(score_cols)) {
         x <- as.numeric(scores_sub[[score_cols[i]]])
         use <- !is.na(x) & !is.na(y_num)
-        if (sum(use) < 5 || sd(x[use]) == 0 || sd(y_num[use]) == 0) next
+        if (sum(use) < 8 || sd(x[use]) == 0 || sd(y_num[use]) == 0) next   # 8 = the pipelines' PHENO_MIN_N
         ct <- tryCatch(cor.test(x[use], y_num[use], method = "pearson"),
                        error = function(e) NULL)
         if (is.null(ct)) next
@@ -3874,7 +3899,7 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
       for (i in seq_along(score_cols)) {
         x <- as.numeric(scores_sub[[score_cols[i]]])
         use <- !is.na(x) & !is.na(g_raw) & g_raw != "" & g_raw != "NA"
-        if (sum(use) < 5) next
+        if (sum(use) < 8) next   # the pipelines' PHENO_MIN_N
         grp <- factor(g_raw[use])
         if (nlevels(grp) < 2) next
         fit <- tryCatch(stats::aov(x[use] ~ grp), error = function(e) NULL)
@@ -3890,10 +3915,20 @@ DoPrecomputed <- function(step, method="NULL", combo="NULL", file="NULL",
     }
   }
 
-  # BH-adjust across the whole matrix (same convention as the precomputed CSV)
-  pvec <- as.vector(p_mat)
-  padj_vec <- p.adjust(pvec, method = "BH")
-  padj_mat <- matrix(padj_vec, nrow = n_rows, ncol = n_cols)
+  # Benjamini-Hochberg exactly as the precomputed files: per factor/module (row) and per test type, across all phenotypes
+  # of the analysis; Multi-omics cluster in its own group across the factors/modules (user decision 2026-10-09)
+  padj_mat <- matrix(NA_real_, n_rows, n_cols)
+  is_cl <- pheno_cols == "cluster_v2"
+  for (m in unique(col_methods)) {
+    cols_m <- which(col_methods == m & !is_cl)
+    if (length(cols_m)) for (i in seq_len(n_rows)) padj_mat[i, cols_m] <- p.adjust(p_mat[i, cols_m], method = "BH")
+  }
+  if (any(is_cl)) { jc <- which(is_cl); padj_mat[, jc] <- p.adjust(p_mat[, jc], method = "BH") }
+  # return the displayed phenotypes only
+  disp <- match(disp_cols, pheno_cols)
+  stat_mat <- stat_mat[, disp, drop = FALSE]; p_mat <- p_mat[, disp, drop = FALSE]
+  n_mat <- n_mat[, disp, drop = FALSE];       padj_mat <- padj_mat[, disp, drop = FALSE]
+  pheno_cols <- disp_cols; col_methods <- col_methods[disp]; col_types <- col_types[disp]; n_cols <- length(pheno_cols)
 
   # Drop phenotype columns that are all-NA in this subset (constant phenotype such
   # as Sex within a single-sex subset, <2 groups, etc.) so the heatmap only shows
@@ -3993,7 +4028,8 @@ PrecomputedTraitCorr <- function(method, combo, trait, category, primaryType,
                             auto_unbox = TRUE))
   }
 
-  pheno <- read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE)
+  cv2lv <- .cluster_v2_level(trait); trait <- .cluster_v2_base(trait)   # Multi-omics cluster: "+ predicted" level
+  pheno <- .cluster_v2_pheno(read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE), cv2lv)
 
   # Match donors
   common <- intersect(donor_ids, pheno$sample_id)
@@ -4119,7 +4155,8 @@ PrecomputedMultigroupCorr <- function(method, combo, trait, category) {
                             auto_unbox = TRUE))
   }
 
-  pheno <- read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE)
+  cv2lv <- .cluster_v2_level(trait); trait <- .cluster_v2_base(trait)   # Multi-omics cluster: "+ predicted" level
+  pheno <- .cluster_v2_pheno(read.csv(pheno_path, stringsAsFactors = FALSE, check.names = FALSE), cv2lv)
 
   # Match donors
   common <- intersect(donor_ids, pheno$sample_id)

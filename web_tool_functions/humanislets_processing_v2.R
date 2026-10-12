@@ -9,7 +9,8 @@
 #   * Every output file is written exactly once.
 #   * Donor clusters: final_cluster = the OLD clusters "C0".."C4" (states.path, kept unchanged);
 #     cluster_v2 = the frozen v2 clusters "C1".."C4" (= Cluster 1-4; were "G0".."G3" before 2026-10-03),
-#     omics donors only (cluster_v2.path = cluster_live_v2/donor_cluster.csv, column cluster).
+#     every donor (omics + predicted) with cluster_v2_source / cluster_v2_reliability; each calculation picks its
+#     donors from these, default omics donors only (cluster_v2.path = cluster_live_v2/donor_cluster.csv).
 #
 # NOT YET RUN against live REDCap. Diff the outputs against the current
 # display_data/*.csv before deploying.
@@ -26,12 +27,24 @@ demo.path    = "/Users/lzy/humanislet/humanislets/updated_data/ADIIsletCoreHuman
 
 # Cluster label per record_id from a cluster table (donor_id, source, `column`): prefix + the value in `column`, NA = no
 # cluster (old v1: donor_states.csv, column cluster 0-4; v2: donor_cluster.csv, column cluster C1-C4).
-# omics_only = TRUE keeps only omics donors (v2: a predicted cluster is never stored as a phenotype).
+# omics_only = TRUE keeps only omics donors.
 cluster_labels <- function(ids, path, prefix, omics_only = FALSE, column = "cluster") {
   st <- read.csv(path, stringsAsFactors = FALSE)
   if (omics_only) st <- st[st$source == "omics", ]
   cl <- st[[column]][match(ids, st$donor_id)]
   ifelse(is.na(cl), NA, paste0(prefix, cl))
+}
+
+# Multi-omics cluster columns (v2): cluster_v2 = every donor's cluster "C1".."C4" (omics donors' and predicted ones),
+# cluster_v2_source = omics | predicted, cluster_v2_reliability = high | medium | low (predicted donors only).
+# Each calculation picks its donors from these; the default everywhere is omics donors only (user 2026-10-09).
+add_cluster_v2 <- function(df, path) {
+  st <- read.csv(path, stringsAsFactors = FALSE)
+  i <- match(as.character(df$record_id), as.character(st$donor_id))
+  df$cluster_v2 <- st$cluster[i]
+  df$cluster_v2_source <- st$source[i]
+  df$cluster_v2_reliability <- ifelse(st$source[i] %in% "predicted", st$reliability[i], NA)
+  df
 }
 
 # Wide seahorse csv (variables in rows, "R###_<rep>" columns) -> tidy per-sample.
@@ -581,7 +594,7 @@ redcap_export_fun <- function(api_token,
   for (c in setdiff(MITO_COLS, colnames(metadata_norm)))
     metadata_norm[[c]] <- mito_norm[[c]][match(metadata_norm$record_id, mito_norm$record_id)]
   metadata_norm$final_cluster <- cluster_labels(metadata_norm$record_id, states.path, "C")
-  metadata_norm$cluster_v2    <- cluster_labels(metadata_norm$record_id, cluster_v2.path, "", omics_only = TRUE, column = "cluster")
+  metadata_norm <- add_cluster_v2(metadata_norm, cluster_v2.path)
   wcsv(metadata_norm, "metadata_sum_norm.csv")
 
   metadata_raw <- join_ephys(varValues_raw, ephys.dt)
@@ -590,12 +603,13 @@ redcap_export_fun <- function(api_token,
   for (c in setdiff(MITO_COLS, colnames(metadata_raw)))
     metadata_raw[[c]] <- mito_out[[c]][match(metadata_raw$record_id, mito_out$record_id)]
   metadata_raw$final_cluster <- cluster_labels(metadata_raw$record_id, states.path, "C")
-  metadata_raw$cluster_v2    <- cluster_labels(metadata_raw$record_id, cluster_v2.path, "", omics_only = TRUE, column = "cluster")
+  metadata_raw <- add_cluster_v2(metadata_raw, cluster_v2.path)
   wcsv(metadata_raw, "metadata_sum_raw.csv")
 
   ## ---- 9. Spearman correlation ----------------------------------------------
   library(Hmisc)
-  df_clean <- metadata_norm[, setdiff(colnames(metadata_norm), c("record_id", "final_cluster"))]   # old v1 clusters not correlated: only cluster_v2
+  corr_in <- metadata_norm; corr_in$cluster_v2[!(corr_in$cluster_v2_source %in% "omics")] <- NA   # Multi-omics cluster: omics donors only (default)
+  df_clean <- corr_in[, setdiff(colnames(corr_in), c("record_id", "final_cluster", "cluster_v2_source", "cluster_v2_reliability"))]   # old v1 clusters not correlated: only cluster_v2
   df_clean[] <- lapply(df_clean, function(x) if (is.character(x) || is.factor(x)) as.numeric(factor(x)) else x)
   df_clean <- df_clean[, colSums(!is.na(df_clean)) >= 6]
   rc <- rcorr(as.matrix(df_clean), type = "spearman")
@@ -623,14 +637,14 @@ redcap_export_fun <- function(api_token,
   # donor_states$cluster is 0..4, so prefix "C". NA stays NA (donors with no cluster).
   cl <- donor_states$cluster[match(proc_metadata$record_id, donor_states$donor_id)]
   proc_metadata$final_cluster <- ifelse(is.na(cl), NA, paste0("C", cl))
-  proc_metadata$cluster_v2 <- cluster_labels(proc_metadata$record_id, cluster_v2.path, "", omics_only = TRUE, column = "cluster")
+  proc_metadata <- add_cluster_v2(proc_metadata, cluster_v2.path)
   tables$proc_metadata <- proc_metadata
 
   # also carry final_cluster on the donor table (the old pipeline had it there, and the
   # interface may read the label from `donor`). Same 0..4 -> "C0".."C4" mapping.
   cld <- donor_states$cluster[match(tables$donor$record_id, donor_states$donor_id)]
   tables$donor$final_cluster <- ifelse(is.na(cld), NA, paste0("C", cld))
-  tables$donor$cluster_v2 <- cluster_labels(tables$donor$record_id, cluster_v2.path, "", omics_only = TRUE, column = "cluster")
+  tables$donor <- add_cluster_v2(tables$donor, cluster_v2.path)
 
   sqlite.tables <- c("computed","donor","ephys_cell","ephys_donor","gsis","isolation",
                      "proc_metadata","proc_variable_summary","raw_variable_summary",

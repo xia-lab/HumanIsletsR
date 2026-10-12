@@ -261,11 +261,9 @@ if(version=="v2"){
                cluster = {
                 filt <- str_split(filter$cluster, ",")[[1]];
                 lv <- sub("^lv_", "", grep("^lv_", filt, value = TRUE)); filt <- grep("^lv_", filt, value = TRUE, invert = TRUE)
-                filt.list <- donor.table[(cluster_v2 %in% filt), record_id];   # the v2 clusters (C1-C4 = Cluster 1-4)
-                if(length(lv) == 1 && !is.null(.cluster_v2_level(paste0("cluster_v2.", lv)))){   # + predicted donors (Omics / Multi-omics pages)
-                  dc <- .cluster_v2_table()
-                  if(!is.null(dc)) filt.list <- union(filt.list, dc$donor_id[dc$source == "predicted" & dc$reliability %in% .cluster_v2_reliabilities(lv) & dc$cluster %in% filt])
-                }
+                lv <- if(length(lv) == 1) .cluster_v2_level(paste0("cluster_v2.", lv)) else NULL   # "+ predicted" level; none = omics donors only
+                sel <- .fill_cluster_v2(as.data.frame(donor.table), lv)
+                filt.list <- sel$record_id[sel$cluster_v2 %in% filt];   # the v2 clusters (C1-C4 = Cluster 1-4) of the selected donors
                 donors <- intersect(donors, filt.list);
                },
 
@@ -1368,7 +1366,7 @@ getDonorInfo <- function(record_id, dataType,version="v2"){
          
            donor.res$t1d_grs = list(value = round(info$t1d_grs,2), perc = getPercentile(info$t1d_grs, all.info$t1d_grs))
            
-           donor.res$t2d_grs_hard = list(value = round(info$t2d_grs_hard, 2), perc = getPercentile(info$t2d_grs_hard, all.info$t2d_grs_hard))
+           donor.res$t2d_suzuki24_prscsx_ma = list(value = round(info$t2d_suzuki24_prscsx_ma, 2), perc = getPercentile(info$t2d_suzuki24_prscsx_ma, all.info$t2d_suzuki24_prscsx_ma))
      
         parsc = info$t2d_beta_cell_pineg + info$t2d_beta_cell_pipos +info$t2d_body_fat+info$t2d_lipodys+info$t2d_liver_lipid+info$t2d_metabo_syndrome+info$t2d_obesity+info$t2d_glyc;
 

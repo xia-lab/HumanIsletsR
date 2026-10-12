@@ -14,6 +14,12 @@ getAtlasLayer <- function(omicsType, layerType, donorId, condition, analysisVar,
   if (fixedEffects == "NA") fixedEffects <- NULL else fixedEffects <- strsplit(fixedEffects, ";")[[1]]
   if (donorId == "" || donorId == "NA") donorId <- NULL
   if (analysisVar == "NA") analysisVar <- NULL
+  # Multi-omics cluster "Include": "cluster_v2.<level>" (comparison mode) or "C1.<level>" (cluster mode); none = omics donors only
+  cv2lv <- NULL
+  if (!is.null(analysisVar)) { cv2lv <- .cluster_v2_level(analysisVar); analysisVar <- .cluster_v2_base(analysisVar) }
+  if (layerType == "cluster" && !is.null(donorId) && grepl("[.]", donorId)) {
+    cv2lv <- .cluster_v2_level(paste0("cluster_v2.", sub("^[^.]*[.]", "", donorId))); donorId <- sub("[.].*$", "", donorId)
+  }
   if (ref == "NA") ref <- NULL
   if (contrast == "NA") contrast <- NULL
 
@@ -24,6 +30,7 @@ getAtlasLayer <- function(omicsType, layerType, donorId, condition, analysisVar,
   # Load metadata from HI_tables.sqlite (separate database)
   meta_db <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
   pheno <- dbReadTable(meta_db, "proc_metadata")
+  pheno <- .fill_cluster_v2(pheno, cv2lv)   # Multi-omics cluster: donors of the "Include" choice (default omics donors only)
   dbDisconnect(meta_db)
   rownames(pheno) <- pheno$record_id
 

@@ -24,6 +24,7 @@ getHeatmapData<- function(reset="no"){
   }
 
   dat<-read.csv(paste0(other.tables.path,"display_data/metadata_sum_raw.csv"))
+  dat <- .cluster_v2_pheno(dat, .pheno_cluster_level(), "record_id")   # Multi-omics cluster: donors of the "Include" choice (default omics donors only)
 
   if(file.exists("donors.rds")){
     donors <- readRDS("donors.rds")
@@ -73,6 +74,7 @@ getChordData<- function(corrcutoff=0.5,pvalcutoff=0.05,intragroup,reset="no"){
     donors <- readRDS("donors.rds")
 library(Hmisc)
      metadat<-read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"))
+     metadat <- .cluster_v2_pheno(metadat, .pheno_cluster_level(), "record_id")   # Multi-omics cluster: donors of the "Include" choice (default omics donors only)
  df_clean <- metadat[metadat$record_id %in%donors, setdiff(colnames(metadat), c("record_id", "final_cluster"))]   # old v1 clusters not correlated: only cluster_v2
 
 df_clean[] <- lapply(df_clean, function(x) {
@@ -182,6 +184,7 @@ getPairData<- function(meta1,meta2){
 library(ggplot2)
 library(plotly)
    dat<-read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"))
+   dat <- .cluster_v2_pheno(dat, .pheno_cluster_level(), "record_id")   # Multi-omics cluster: donors of the "Include" choice (default omics donors only)
  
 dat <- unique(na.omit(dat[,c("record_id",meta1,meta2)]));
  
@@ -372,6 +375,9 @@ getPhenotypePCA <- function(colorBy = "diagnosis",
 
   # Load phenotype data (normalized for PCA)
   dat <- read.csv(paste0(other.tables.path, "display_data/metadata_sum_norm.csv"))
+  cv2lv <- .cluster_v2_level(colorBy); if(is.null(cv2lv)) cv2lv <- .cluster_v2_level(shapeBy)   # Multi-omics cluster "Include" (PCA page); none = omics donors only
+  colorBy <- .cluster_v2_base(colorBy); shapeBy <- .cluster_v2_base(shapeBy)
+  dat <- .cluster_v2_pheno(dat, cv2lv, "record_id")
   meta_group <- read.csv(paste0(other.tables.path, "display_interface/meta_groups.csv"))
 
   # Apply donor filter if exists
@@ -707,6 +713,9 @@ getPhenotypePCAStatic <- function(colorBy = "diagnosis",
 
   # Load data (normalized for PCA)
      dat <- read.csv(paste0(other.tables.path, "display_data/metadata_sum_norm.csv"))
+     cv2lv <- .cluster_v2_level(colorBy); if(is.null(cv2lv)) cv2lv <- .cluster_v2_level(shapeBy)   # Multi-omics cluster "Include" (PCA page); none = omics donors only
+     colorBy <- .cluster_v2_base(colorBy); shapeBy <- .cluster_v2_base(shapeBy)
+     dat <- .cluster_v2_pheno(dat, cv2lv, "record_id")
   meta_group <- read.csv(paste0(other.tables.path, "display_interface/meta_groups.csv"))
     # Apply filters
   if(file.exists("donors.rds")) {
@@ -871,15 +880,20 @@ getPhenotypePCAStatic <- function(colorBy = "diagnosis",
 ################################################################################
 
 
+# "Include" for Multi-omics cluster chosen in the phenotype dialog (saved by getPheno_fun); none = omics donors only
+.pheno_cluster_level <- function() if(file.exists("cluster_v2_level.rds")) readRDS("cluster_v2_level.rds") else NULL
+
 getPheno_fun <- function (){
    
 require(jsonlite)
 filter <- read_json("pheno.json"); 
 filter = unlist(filter)
+lv <- if("cluster_v2_level" %in% names(filter)) as.character(filter[["cluster_v2_level"]]) else "omics"   # "Include" for Multi-omics cluster
+saveRDS(.cluster_v2_level(paste0("cluster_v2.", lv)), "cluster_v2_level.rds")   # NULL = omics donors only
 # Subset = keep ONLY the ticked phenotypes. Every other phenotype column is removed too, so a
 # phenotype without a checkbox in the dialog can no longer stay in the analysis.
 keep = names(filter)[filter=="TRUE"]
-allpheno = setdiff(colnames(read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"), nrows = 1)), "record_id")
+allpheno = setdiff(colnames(read.csv(paste0(other.tables.path,"display_data/metadata_sum_norm.csv"), nrows = 1)), c("record_id", "cluster_v2_source", "cluster_v2_reliability"))
 rm = setdiff(allpheno, keep)
 saveRDS(rm,"rmphemo.rds")
 

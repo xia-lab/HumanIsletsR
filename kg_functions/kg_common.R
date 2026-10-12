@@ -205,7 +205,10 @@
   .kgSetPaths()
   f <- paste0(other.tables.path, "display_data/", if(use_raw) "metadata_sum_raw.csv" else "metadata_sum_norm.csv")
   if(!file.exists(f)) return(NULL)
-  utils::read.csv(f, check.names = FALSE, stringsAsFactors = FALSE)
+  m <- utils::read.csv(f, check.names = FALSE, stringsAsFactors = FALSE)
+  # Multi-omics cluster: omics donors only (no donor-set choice here); the two bookkeeping columns are not phenotypes
+  if(exists(".cluster_v2_pheno", mode = "function")) m <- .cluster_v2_pheno(m, NULL, "record_id")
+  m
 }
 
 # coerce named metadata columns to numeric (where numeric) else factor.

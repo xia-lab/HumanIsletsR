@@ -580,7 +580,7 @@ print(c(gene.id, meta.var, omics.type,version))
     mydb <- dbConnect(SQLite(), paste0(sqlite.path, "HI_tables.sqlite"))
     query <- paste0("SELECT * FROM ", meta.table)
     metadata <- dbGetQuery(mydb, query)
-    if(!is.null(cv2lv)){ meta.var <- "cluster_v2"; metadata <- .fill_cluster_v2(metadata, cv2lv) }
+    metadata <- .fill_cluster_v2(metadata, cv2lv); if(!is.null(cv2lv)) meta.var <- "cluster_v2"   # selected donors' clusters (default: omics donors only)
 
     # filter by cell and glucose if relevant
     if(grepl("_donor", meta.var)){   # ephys_donor has one row per donor x cell type x glucose: keep the requested glucose too
@@ -881,6 +881,7 @@ plotExpressionByCell <- function(gene.id, display = FALSE){
 .pathwayPhenoDisplay <- function(ids, analysisVar, stored){
   f <- paste0(other.tables.path, "display_data/metadata_sum_raw.csv")
   if(!file.exists(f)) return(stored)
+  if(analysisVar == "cluster_v2") return(stored)   # the selected donors' clusters; the raw table holds every donor's
   hdr <- colnames(data.table::fread(f, nrows = 0))
   if(!all(c("record_id", analysisVar) %in% hdr)) return(stored)
   raw <- data.table::fread(f, select = c("record_id", analysisVar))

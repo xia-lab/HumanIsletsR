@@ -178,7 +178,37 @@
     "metabolite_hg"    = list(omics_id="proc_metabolite_HG",    tbl="proc_metabolite_combat_HG",    id="inchikey",  entity="metabolite"),
     "metabolite_lg"    = list(omics_id="proc_metabolite_LG",    tbl="proc_metabolite_combat_LG",    id="inchikey",  entity="metabolite"),
     "metabolite_ratio" = list(omics_id="proc_metabolite_ratio", tbl="proc_metabolite_combat_ratio", id="inchikey",  entity="metabolite"),
+    # DNA methylation (2026-10-19): one row per CpG, mapped to genes by the collaborator's CpG map (`.kgMethylEnrich`).
+    # Never precomputed (no omics_id); the differential is always this answer's own screen in its user folder.
+    "methylation"          = list(omics_id=NA_character_, tbl=NA_character_, id="cpg", entity="gene", methyl=TRUE),
+    "methylation_promoter" = list(omics_id=NA_character_, tbl=NA_character_, id="cpg", entity="gene", methyl=TRUE),
     NULL)
+}
+
+# ---- DNA METHYLATION PATHWAYS: the website's methylation GSEA, reimplemented here (user 2026-10-19, Q5: "go ahead with
+# the pathway") ------------------------------------------------------------------------------------------------------------
+# The same statistic as the Omics View (humanislets_statistics.R `.runMethylationGSEA`, = methylGSA methylRRA "GSEA"): each
+# gene's CpG p-values -> one Robust Rank Aggregation score (RobustRankAggreg::rhoScores) -> z = qnorm(rho / 2, upper) ->
+# preranked fgsea with scoreType "pos". CpG -> gene from the collaborator's map (libraries/methylation_cpg_anno.qs, the
+# user's ruled annotation), a CpG feeding EVERY gene it is annotated to. ⚠ UNSIGNED: a high score means the pathway's
+# genes carry more strongly changed CpGs, never "lower" or "higher" methylation -- the caller must say so.
+.kgMethylEnrich <- function(de, library, fdr.n){
+  .kgSetPaths()
+  suppressPackageStartupMessages(library(RobustRankAggreg))
+  pv <- setNames(suppressWarnings(as.numeric(de$P_value)), as.character(de$FeatureId))
+  pv <- pv[!is.na(pv) & pv > 0]
+  if(length(pv) < 100) return(NULL)
+  f <- paste0(other.tables.path, "libraries/methylation_cpg_anno.qs"); if(!file.exists(f)) return(NULL)
+  map <- qs::qread(f)
+  mp <- map[map$cpg %in% names(pv) & !is.na(map$entrez), , drop = FALSE]
+  if(!nrow(mp)) return(NULL)
+  mp$entrez <- as.character(mp$entrez)
+  rho <- vapply(split(unname(pv[mp$cpg]), mp$entrez), function(p) RobustRankAggreg::rhoScores(p), numeric(1))
+  z <- stats::qnorm(rho / 2, lower.tail = FALSE)
+  fin <- is.finite(z); if(!any(fin)) return(NULL)
+  z[!fin] <- max(z[fin])
+  sym <- setNames(as.character(mp$symbol), mp$entrez); sym <- sym[!duplicated(names(sym))]
+  .kgFgsea(z, library, fdr.n, sym = sym, score_type = "pos")
 }
 
 # library -> the annotation column it is keyed on, and the entity class it belongs to.
@@ -510,6 +540,13 @@
   if(is.null(got)) return("RES-NO-DIFFERENTIAL")
   de <- got$de; src <- got$src
 
+  # DNA methylation: CpGs reach genes through the collaborator's CpG map, not a proc_* annotation (`.kgMethylEnrich`).
+  # An omnibus (ORA) on CpGs is not built.
+  if(isTRUE(lp$methyl)){
+    if(tolower(analysisType) == "ora") return("RES-NO-ENRICH")
+    er <- .kgMethylEnrich(de, library, fdr.n)
+  } else {
+
   # ---- attach the library's identifier from the layer's annotation columns ----
   con <- dbConnect(SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite"))
   ann <- .kgEnrichAnnot(con, lp$tbl, lp$id, kp$col)
@@ -535,6 +572,7 @@
     .sym <- setNames(as.character(d2$Symbol), as.character(d2$Key))
     er <- .kgFgsea(ranks, library, fdr.n, sym = .sym)
   }
+  }   # (the non-methylation path)
   if(is.null(er) || nrow(er) == 0) return("RES-NO-ENRICH")
 
   # §P: the result must NAME its library, and it carries where the differential came from

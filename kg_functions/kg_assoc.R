@@ -145,6 +145,7 @@
 # (e.g. "Bulk gene expression (RNA-seq)" -> "rnaseq"; "Metabolite (LG)" -> "metabolite_lg").
 .kgLayerKey <- function(display){
   d <- tolower(display)
+  if(grepl("methylation", d)) return(if(grepl("promoter", d)) "methylation_promoter" else "methylation")
   if(grepl("contaminant", d)) return("contaminant")
   if(grepl("metabolic flux", d))
     return(if(grepl("ratio", d)) "flux_ratio" else if(grepl("\\(lg\\)", d)) "flux_lg" else "flux_hg")
@@ -211,11 +212,124 @@
   if(is_screen) "limma" else "lm"
 }
 
+# ---- named-set test: ONE self-contained P for the requested features as a group (set_test = "fry") -----
+# Same data, donors, covariates and model as the per-feature rows (feature ~ phenotype + covariates); the
+# members are then tested TOGETHER with limma::fry. Member handling is the case-study scripts' own `prep`
+# (p10/p11, donor_clustering_pipeline_v2/outputs_basal_floor_case_study_20261011): a member enters when it
+# is measured in >= max(9, 90%) of the donors and varies; its remaining gaps take its own mean; >= 3 members.
+# A categorical phenotype is tested only as a two-level comparison (`lvl` vs `ref`, "rest" allowed).
+.kgFrySet <- function(X, phv, cvd, ptype, lvl = "", ref = "", minN = 10){
+  don <- intersect(colnames(X), names(phv))
+  if(!is.null(cvd) && ncol(cvd)) don <- intersect(don, rownames(cvd))
+  if(length(don) < minN) return(NULL)
+  d <- data.frame(.ph = phv[don], row.names = don, stringsAsFactors = FALSE)
+  if(!is.null(cvd) && ncol(cvd)) d <- cbind(d, cvd[don, , drop = FALSE])
+  if(ptype == "cont"){
+    d$.ph <- suppressWarnings(as.numeric(as.character(d$.ph)))
+  } else {
+    if(!nzchar(lvl) || !nzchar(ref) || identical(lvl, "anova")) return(NULL)
+    v <- as.character(d$.ph); v[v %in% c("", "NA")] <- NA
+    v <- if(identical(ref, "rest")) ifelse(is.na(v), NA, ifelse(v == lvl, lvl, "rest")) else ifelse(v %in% c(lvl, ref), v, NA)
+    d$.ph <- factor(v, levels = c(ref, lvl))
+  }
+  d <- droplevels(d[stats::complete.cases(d), , drop = FALSE])     # only the levels these donors carry (full-rank design)
+  if(nrow(d) < minN || (ptype != "cont" && min(table(d$.ph)) < 2)) return(NULL)
+  Xs <- X[, rownames(d), drop = FALSE]; storage.mode(Xs) <- "double"
+  k <- rowSums(!is.na(Xs)) >= max(9, 0.9 * ncol(Xs)) &
+       apply(Xs, 1, function(v) isTRUE(stats::sd(v, na.rm = TRUE) > 0))
+  Xs <- Xs[k, , drop = FALSE]; if(nrow(Xs) < 3) return(NULL)
+  if(anyNA(Xs)) Xs[is.na(Xs)] <- rowMeans(Xs, na.rm = TRUE)[row(Xs)[is.na(Xs)]]
+  cn <- .kgVaryingCovs(d, setdiff(names(d), ".ph"))
+  D  <- stats::model.matrix(stats::as.formula(paste0("~ .ph", if(length(cn))
+          paste0(" + ", paste(sprintf("`%s`", cn), collapse = " + ")) else "")), data = d)
+  j  <- which(colnames(D) == if(ptype == "cont") ".ph" else paste0(".ph", lvl))
+  if(length(j) != 1) return(NULL)
+  fr <- try(limma::fry(Xs, index = list(set = seq_len(nrow(Xs))), design = D, contrast = j, sort = "none"),
+            silent = TRUE)
+  if(inherits(fr, "try-error") || !NROW(fr)) return(NULL)
+  list(N = nrow(d), NGenes = nrow(Xs), Direction = as.character(fr$Direction[1]), P = as.numeric(fr$PValue[1]),
+       NPred = sum(rownames(d) %in% .GlobalEnv$.kg_pred_ids))
+}
+
+.kgSetRow <- function(s, layer, ph, cvn, pt, contrast, subset_note, method = "fry")
+  data.frame(Layer = layer, Phenotype = ph, N = s$N, N_members = s$NGenes, Direction = s$Direction,
+             P_value = signif(s$P, 4), Covariates = if(length(cvn)) paste(cvn, collapse = ",") else "none",
+             Comparison = if(pt == "disc") contrast else "continuous", Subset = subset_note, Method = method,
+             Effect = if(is.null(s$Effect)) NA_real_ else signif(s$Effect, 4),
+             N_layer = if(is.null(s$NAll)) NA_integer_ else as.integer(s$NAll),
+             N_predicted = if(is.null(s$NPred)) 0L else as.integer(s$NPred),
+             stringsAsFactors = FALSE)
+
+# ---- named-set test "compared with all other features" (set_test = "relative", 2026-10-19) -----------------------------
+# For a question that asks whether a set is lower / higher THAN THE OTHER genes / promoters / proteins of a layer. One score
+# per donor: every feature of the layer standardised across the tested donors (z); the set's mean z minus the mean z of all
+# the layer's features; scaled; then score ~ phenotype + covariates (lm), on the same donors, covariates and contrast as fry.
+# The set score is the published z-score score (Lee et al. 2008, PLoS Comput Biol 4:e1000217; GSVA `zscore`) — verified
+# identical to GSVA 1.52.3 on KEGG Hippo promoter methylation (r = 1.000). Subtracting the layer-wide mean is this project's
+# step: it is what makes the test "than the rest", and it removes a donor-wide shift (MEASURED 2026-10-19: the donors'
+# all-feature mean varies SD 0.275 z for promoter methylation, 0.059 for RNA). Supplementary Figure S5A's methylation score
+# is this score without the per-feature standardisation (Hippo, 24 omics-clustered donors: -1.30 SD P 0.012 raw,
+# -1.24 SD P 0.031 standardised; leave-one-gene-out all P < 0.05). Features enter as for fry (>= max(9, 90%) of the donors,
+# varying; remaining gaps take the feature's own mean); >= 3 members. A CpG layer is first summarised per gene (mean of
+# the gene's CpGs, S5A's step), so the set and the rest are genes: `genes` = each row's gene list, `members` = symbols.
+.kgRelMethod <- "z-score set score vs all features"
+.kgRelScoreSet <- function(Xall, members, phv, cvd, ptype, lvl = "", ref = "", minN = 10, genes = NULL){
+  don <- intersect(colnames(Xall), names(phv))
+  if(!is.null(cvd) && ncol(cvd)) don <- intersect(don, rownames(cvd))
+  if(length(don) < minN) return(NULL)
+  d <- data.frame(.ph = phv[don], row.names = don, stringsAsFactors = FALSE)
+  if(!is.null(cvd) && ncol(cvd)) d <- cbind(d, cvd[don, , drop = FALSE])
+  if(ptype == "cont"){
+    d$.ph <- suppressWarnings(as.numeric(as.character(d$.ph)))
+  } else {
+    if(!nzchar(lvl) || !nzchar(ref) || identical(lvl, "anova")) return(NULL)
+    v <- as.character(d$.ph); v[v %in% c("", "NA")] <- NA
+    v <- if(identical(ref, "rest")) ifelse(is.na(v), NA, ifelse(v == lvl, lvl, "rest")) else ifelse(v %in% c(lvl, ref), v, NA)
+    d$.ph <- factor(v, levels = c(ref, lvl))
+  }
+  d <- droplevels(d[stats::complete.cases(d), , drop = FALSE])
+  if(nrow(d) < minN || (ptype != "cont" && min(table(d$.ph)) < 2)) return(NULL)
+  X <- Xall[, rownames(d), drop = FALSE]; storage.mode(X) <- "double"
+  if(!is.null(genes)){
+    gi <- rep(seq_along(genes), lengths(genes)); gg <- toupper(trimws(unlist(genes)))
+    ok <- !is.na(gg) & nzchar(gg); gi <- gi[ok]; gg <- gg[ok]
+    if(!length(gg)) return(NULL)
+    X <- rowsum(X[gi, , drop = FALSE], gg, na.rm = TRUE) / as.vector(rowsum(rep(1, length(gg)), gg))
+    members <- toupper(trimws(as.character(members)))
+  }
+  k <- rowSums(!is.na(X)) >= max(9, 0.9 * ncol(X)) & apply(X, 1, function(v) isTRUE(stats::sd(v, na.rm = TRUE) > 0))
+  X <- X[k, , drop = FALSE]
+  s_in <- rownames(X) %in% members
+  if(sum(s_in) < 3 || nrow(X) <= sum(s_in)) return(NULL)
+  if(anyNA(X)) X[is.na(X)] <- rowMeans(X, na.rm = TRUE)[row(X)[is.na(X)]]
+  Z <- t(scale(t(X)))
+  d$.score <- as.numeric(scale(colMeans(Z[s_in, , drop = FALSE]) - colMeans(Z)))
+  cn <- .kgVaryingCovs(d, setdiff(names(d), c(".ph", ".score")))
+  f <- try(stats::lm(stats::as.formula(paste0(".score ~ .ph", if(length(cn))
+         paste0(" + ", paste(sprintf("`%s`", cn), collapse = " + ")) else "")), data = d), silent = TRUE)
+  if(inherits(f, "try-error")) return(NULL)
+  cf <- summary(f)$coefficients
+  j <- if(ptype == "cont") ".ph" else paste0(".ph", lvl)
+  if(!(j %in% rownames(cf))) return(NULL)
+  list(N = nrow(d), NGenes = sum(s_in), NAll = nrow(X), Direction = if(cf[j, 1] < 0) "Down" else "Up",
+       P = as.numeric(cf[j, 4]), Effect = as.numeric(cf[j, 1]),
+       NPred = sum(rownames(d) %in% .GlobalEnv$.kg_pred_ids),
+       # the score the model fitted, one row per donor (2026-10-19: the IsletAgent donor plot draws them, as S5A does)
+       Scores = data.frame(record_id = rownames(d), group = as.character(d$.ph), score = signif(d$.score, 5),
+                           predicted = rownames(d) %in% .GlobalEnv$.kg_pred_ids, stringsAsFactors = FALSE))
+}
+
+# one row per donor of a relative set test, keyed like its set row (layer, phenotype); NULL for fry (no per-donor score)
+.kgSetScores <- function(s, layer, ph){
+  if(is.null(s) || is.null(s$Scores) || !nrow(s$Scores)) return(NULL)
+  data.frame(Layer = layer, Phenotype = ph, s$Scores, stringsAsFactors = FALSE)
+}
+
 .kgAssocImpl <- function(features = "", phenotypes = "",
                     layers = "all", covariates = "default",
                     subset = "all", contrast = "", ref = "",
                     fdr_family = "query", minN = "10", method = "auto",
-                    mode = "tool"){
+                    mode = "tool", set_test = ""){
   library(RSQLite); library(DBI)
   .kgSetPaths()
   minN <- suppressWarnings(as.integer(minN)); if(is.na(minN)) minN <- 10L
@@ -229,7 +343,19 @@
     if(length(pp) == 2){ ct_lvl <- pp[1]; ct_ref <- pp[2] }
   }
 
-  m <- .kgLoadMetaFrame(); if(is.null(m)) return("RES-NO-META")
+  # ⚠ "cluster_v2.<level>" = the multi-omics cluster WITH predicted donors (2026-10-19, user: "use all available donors
+  # here"; the case study's donor set). The level is read off the name, the metadata is loaded at that level, and the
+  # analysis runs on the plain column — rows report "cluster_v2" as before. Any other phenotype is untouched.
+  cv2lv <- NULL
+  if(exists(".cluster_v2_level", mode = "function")){
+    .pt0 <- trimws(strsplit(phenotypes, "[,;]")[[1]])
+    .lv0 <- unlist(lapply(.pt0, .cluster_v2_level))
+    if(length(.lv0)){
+      cv2lv <- .lv0[1]
+      phenotypes <- paste(vapply(.pt0, .cluster_v2_base, character(1)), collapse = ",")
+    }
+  }
+  m <- .kgLoadMetaFrame(level = cv2lv); if(is.null(m)) return("RES-NO-META")
   meta_names <- names(m); rec <- as.character(m[["record_id"]])
 
   # ---- phenotypes: expand parents -> leaves; "all" -> all catalogue leaves ----
@@ -276,6 +402,10 @@
 
   con <- dbConnect(SQLite(), db.path); on.exit(dbDisconnect(con), add = TRUE)
   rows <- list()
+  set_rows <- list()
+  set_scores <- list()                                              # per-donor set scores (relative test only)
+  set_kind <- tolower(trimws(set_test))
+  do_set <- set_kind %in% c("fry", "relative") && !is_screen       # "relative": `.kgRelScoreSet`, the set vs all features
   # ⚠ A LAYER SKIPPED FOR TOO FEW DONORS WAS SILENT (user 2026-10-01, "yes, go ahead"). Both engines `next` past a
   # layer whose donors (layer x subset) fall below `minN`, and nothing said so -- MEASURED on F4 "Which beta-cell genes
   # … Tamil Sri Lankan, in female donors only?": 6 female donors carry beta-cell data, no beta row came back, and the
@@ -331,6 +461,13 @@
 
   # ---- resolve the named features (ANY entity) BEFORE choosing the engine ----
   feats <- list(); ftoks <- character(0)
+  # DNA methylation keys this call NAMES (never a default layer; see `.kgLoadMethylation`, kg_common.R). They are fitted in
+  # their own block below, after the two engines, so every other layer keeps exactly the path it had.
+  # read through `.kgLayerKey`, as every display name is: the agent's trained call carries the question's own word
+  # ("promoter methylation"), the fired call the key ("methylation_promoter") -- both name the same layer
+  meth_keys <- if(identical(layers, "all") || grepl("/", layers, fixed = TRUE)) character(0) else {
+    .lt <- trimws(strsplit(layers, "[,;]")[[1]]); .lt <- .lt[nzchar(.lt)]
+    intersect(unique(vapply(.lt, .kgLayerKey, character(1), USE.NAMES = FALSE)), .kgMethLayerKeys) }
   if(!is_screen){
     res <- .kgLoadFeatureResolver(); if(is.null(res)) return("RES-NO-RESOLVER")
     ftoks <- .kgSplitFeatures(feat_raw, res); ftoks <- ftoks[nzchar(ftoks)]
@@ -356,7 +493,9 @@
         }
       }
     }
-    if(length(feats) == 0) return("RES-NO-RESOLVE")
+    # methylation features are not in the resolver (CpGs are read off the matrix's own annotation), so a call that names
+    # only methylation layers goes on to the methylation block
+    if(length(feats) == 0 && !length(meth_keys)) return("RES-NO-RESOLVE")
   }
 
   # ---- ENGINE CHOICE: named set -> lm, until it is big enough to be a screen in all but
@@ -413,6 +552,22 @@
             Covariates = if(length(cvn)) paste(cvn, collapse = ",") else "none",
             Comparison = if(pt == "disc") (if(nzchar(contrast)) contrast else paste0("auto(", cell$EffectType, ")")) else "continuous",
             Subset = subset_note, Method = meth, stringsAsFactors = FALSE)
+        }
+      }
+      if(do_set && identical(set_kind, "relative")){
+        LA <- .kgLoadLayerMatrix(con, la$table, la$read_col, la$rowfilter)
+        if(!is.null(LA)) for(ph in phenos){
+          s <- .kgRelScoreSet(LA$mat[, intersect(colnames(LA$mat), dcommon), drop = FALSE], read_vals,
+                              P[[ph]]$phv, P[[ph]]$cvd, P[[ph]]$pt, ct_lvl, ct_ref, minN)
+          if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, la$display, ph, P[[ph]]$cvn, P[[ph]]$pt, contrast,
+                                                                      subset_note, method = .kgRelMethod)
+          set_scores[[length(set_scores)+1]] <- .kgSetScores(s, la$display, ph)
+        }
+      } else if(do_set){
+        sx <- FR$mat[intersect(rownames(FR$mat), read_vals), dcommon, drop = FALSE]
+        for(ph in phenos){
+          s <- .kgFrySet(sx, P[[ph]]$phv, P[[ph]]$cvd, P[[ph]]$pt, ct_lvl, ct_ref, minN)
+          if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, la$display, ph, P[[ph]]$cvn, P[[ph]]$pt, contrast, subset_note)
         }
       }
     }
@@ -473,6 +628,18 @@
         # narrowed on the fitted rows, for the same reason as the screen path above: `cvn` is what
         # the `Covariates` column reports, and the fit has already dropped anything constant here.
         cvn <- .kgVaryingCovs(md, cvn)
+        if(do_set && !is.null(w$keep)){
+          s <- if(identical(set_kind, "relative"))
+                 .kgRelScoreSet(Lmat, w$keep, stats::setNames(md[[ph]], rownames(md)),
+                                if(length(cvn)) md[, cvn, drop = FALSE] else NULL, pt, ct_lvl, ct_ref, minN)
+               else
+                 .kgFrySet(Lmat[intersect(rownames(Lmat), w$keep), , drop = FALSE],
+                           stats::setNames(md[[ph]], rownames(md)), if(length(cvn)) md[, cvn, drop = FALSE] else NULL,
+                           pt, ct_lvl, ct_ref, minN)
+          if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, w$disp, ph, cvn, pt, contrast, subset_note,
+                                                                      method = if(identical(set_kind, "relative")) .kgRelMethod else "fry")
+          set_scores[[length(set_scores)+1]] <- .kgSetScores(s, w$disp, ph)
+        }
         # ONE choice of fit; the two functions return the same columns (kg_common.R).
         fitfun <- if(identical(meth, "kendall")) .kgKendallFit else .kgLimmaFit
         if(pt == "disc"){
@@ -514,6 +681,63 @@
     }
   }
 
+  # ===================== DNA METHYLATION (per CpG; ALWAYS the full-layer limma fit) =====================
+  # The same fit the limma engine runs (`.kgLimmaFit`: trend + robust eBayes, the question's covariates, constant ones
+  # dropped), on EVERY CpG of the key, then the named CpGs extracted -- never subset-then-fit, so the variance prior comes
+  # from the whole layer. A named set's CpGs also get the group test (fry), exactly as on the other layers.
+  for(mk in meth_keys){
+    L <- .kgLoadMethylation(mk); if(is.null(L)) next
+    keep <- if(is_screen) NULL else .kgMethRows(L, ftoks)
+    dcommon <- intersect(colnames(L$mat), keep_ids)
+    if(!is_screen && !length(keep)){ .note_layer(L$disp, dcommon, status = "no_feature"); next }
+    .note_layer(L$disp, dcommon)
+    if(length(dcommon) < minN) next
+    Lmat <- L$mat[, dcommon, drop = FALSE]
+    for(ph in phenos){
+      pt  <- .kgPhenoType(m, ph)
+      cvn <- covcols_for(ph)
+      md  <- .kgCoerce(m, unique(c(ph, cvn))); rownames(md) <- rec
+      md  <- md[intersect(rownames(md), dcommon), , drop = FALSE]
+      cvn <- .kgVaryingCovs(md, cvn)
+      if(do_set && identical(set_kind, "relative") && length(keep)){
+        s <- .kgRelScoreSet(Lmat, ftoks, stats::setNames(md[[ph]], rownames(md)),
+                            if(length(cvn)) md[, cvn, drop = FALSE] else NULL, pt, ct_lvl, ct_ref, minN, genes = L$genes)
+        if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, L$disp, ph, cvn, pt, contrast, subset_note,
+                                                                    method = .kgRelMethod)
+        set_scores[[length(set_scores)+1]] <- .kgSetScores(s, L$disp, ph)
+      } else if(do_set && length(keep)){
+        s <- .kgFrySet(Lmat[keep, , drop = FALSE], stats::setNames(md[[ph]], rownames(md)),
+                       if(length(cvn)) md[, cvn, drop = FALSE] else NULL, pt, ct_lvl, ct_ref, minN)
+        if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, L$disp, ph, cvn, pt, contrast, subset_note)
+      }
+      if(pt == "disc"){
+        pc <- parse_contrast(); rr <- pc$r
+        lv <- levels(factor(as.character(md[[ph]])))
+        if(length(lv) < 2){ one.class <- TRUE; next }
+        if(identical(pc$c, "anova") && !nzchar(rr)) rr <- lv[1]
+        de <- .kgLimmaFit(Lmat, L$info, md, ph, pt, ref = rr, contrast = pc$c)
+      } else {
+        de <- .kgLimmaFit(Lmat, L$info, md, ph, pt, "", "")
+      }
+      if(is.null(de) || nrow(de) == 0) next
+      if(!is.null(keep)){
+        de <- de[as.character(de$FeatureId) %in% keep, , drop = FALSE]
+        if(nrow(de) == 0) next
+      }
+      # a SCREEN names its layer by KEY, as the gene-layer screens do (`disp = ln`): kgEnrichment matches the user folder's
+      # differential on that key (`.kgEnrichFromUserFolder`); a targeted run keeps the display name
+      rows[[length(rows)+1]] <- data.frame(
+        Feature = de$FeatureId, Symbol = de$Symbol, Entity = "cpg", Layer = if(is_screen) mk else L$disp, Phenotype = ph,
+        N = de$N, Effect = signif(de$Effect, 3), EffectType = de$EffectType,
+        Statistic = signif(de$T_statistic, 3), P_value = signif(de$P_value, 4),
+        Direction = ifelse(is.na(de$Effect), "NA", ifelse(de$Effect > 0, "up", "down")),
+        Covariates = if(length(cvn)) paste(cvn, collapse = ",") else "none",
+        Comparison = if(pt == "disc") (if(nzchar(contrast)) contrast else "anova") else "continuous",
+        Subset = subset_note, Method = "limma",
+        Adjusted_p_value = signif(de$Adjusted_p_value, 4), stringsAsFactors = FALSE)
+    }
+  }
+
   # an OFFERED layer (staged spec, not run, has donors) is written with its donor counts and Status `not_calculated`, so
   # the caller can say it can still be calculated; contaminants are named per tissue, as the run would name them
   for(k in offered){
@@ -527,12 +751,35 @@
                                 N_usable = integer(0), MinN = integer(0), Status = character(0),
                                 Subset = character(0), N_level = integer(0), N_ref = integer(0)),
                    "kg_assoc_layers.csv", row.names = FALSE)
+  # the named-set test, when asked for: its OWN file (empty when no set row could be computed), so
+  # kg_assoc.csv and the RES-OK count stay exactly as before. BH across this call's set rows (fdrFamily "query").
+  if(do_set){
+    so <- if(length(set_rows)) do.call(rbind, set_rows) else
+            data.frame(Layer = character(0), Phenotype = character(0), N = integer(0), N_members = integer(0),
+                       Direction = character(0), P_value = numeric(0), Covariates = character(0),
+                       Comparison = character(0), Subset = character(0), Method = character(0),
+                       Effect = numeric(0), N_layer = integer(0), N_predicted = integer(0))
+    so$P_family <- if(nrow(so)) signif(stats::p.adjust(so$P_value, method = "BH"), 4) else numeric(0)
+    utils::write.csv(so, "kg_assoc_set.csv", row.names = FALSE)
+    # the relative test's per-donor scores (2026-10-19), its OWN file so nothing above changes; empty when none was computed
+    if(identical(set_kind, "relative")){
+      set_scores <- Filter(Negate(is.null), set_scores)
+      sc <- if(length(set_scores)) do.call(rbind, set_scores) else
+              data.frame(Layer = character(0), Phenotype = character(0), record_id = character(0), group = character(0),
+                         score = numeric(0), predicted = logical(0))
+      utils::write.csv(sc, "kg_assoc_setscore.csv", row.names = FALSE)
+    }
+  }
 
   # ⚠ "NOTHING TO COMPARE" IS NOT "COMPARED AND FOUND NOTHING". A bare RES-NO means the test RAN and
   # came back empty, which IS an answer; RES-ONE-CLASS means it could not run at all. Merging them
   # would teach a reader that a subset with one diagnosis level is a measured null.
   if(length(rows) == 0)
     return(if(one.class || isTRUE(.GlobalEnv$.kg_one_class)) "RES-ONE-CLASS" else "RES-NO")
+  # one call can mix targeted rows (no Adjusted_p_value) with methylation rows (limma, with it): give every row block the
+  # same columns, NA where a block has none. Blocks that already match are unchanged.
+  .allc <- unique(unlist(lapply(rows, names)))
+  rows <- lapply(rows, function(d){ for(cn in setdiff(.allc, names(d))) d[[cn]] <- NA; d[, .allc, drop = FALSE] })
   out <- do.call(rbind, rows)
 
   # ---- family FDR (default #1: BH across exactly the tests asked; never genome-wide) ----

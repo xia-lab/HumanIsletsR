@@ -260,8 +260,13 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 
 # ==============================================================================
 # kgPhenoGroup - phenotype x GROUPING screen (frame F35)
-#   OUT: Phenotype, N, Groups, Statistic, P_value, Direction, Box, Adjusted_p_value
+#   OUT: Phenotype, N, Groups, Statistic, P_value, Direction, Box, Adjusted_p_value, Effect, Effect_type
 #        Box = per level 'level:min,q1,median,q3,max', levels joined by '|' (F35's turn-2 box view)
+#        Effect (2026-10-12, the page's volcano needs an effect size comparable across phenotypes): 2 levels ->
+#        rank-biserial r = 2*U/(n1*n2) - 1 from the SAME ranks as the Wilcoxon test, in [-1, 1], positive = the
+#        second level higher (as Direction); >2 levels -> epsilon-squared = H/(n-1) from the SAME Kruskal-Wallis
+#        test, in [0, 1], no direction. Appended LAST so every existing column keeps its position; the test,
+#        N, Statistic, P_value, Direction, Box and Adjusted_p_value are computed exactly as before.
 # ------------------------------------------------------------------------------
 # Which phenotypes differ across the LEVELS of a grouping variable (donor STATE
 # final_cluster / diagnosis / donorsex)? feature x state IS precomputed, but
@@ -274,6 +279,45 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 #   grouping   : column to group by ("final_cluster" | "diagnosis" | "donorsex")
 #   levels     : "C0,C2" -> pairwise (2 groups) ; "" -> ALL non-blank levels (omnibus)
 #   phenotypes : "all" -> every continuous non-grouping column ; else a named list
+# ---- the covariate-adjusted group comparison: the Donor Cluster Explorer's model (compareClusterPhenotypes) ---------------
+# lm(value ~ group + covariates) on the donors with every value (complete cases), >= 3 donors per group, covariates that are
+# constant on these donors dropped (`.kgVaryingCovs`). Two groups: P and t of the group term, `Coefficient` = that term in
+# the phenotype's units (the cluster page's Effect), `Effect` = Coefficient / SD of the phenotype on these donors so the
+# volcano compares phenotypes on one scale; the sign follows this function's own rule (positive = the SECOND level, in
+# `Groups` order, higher). More than two groups: the group factor's F test (lm with vs without it), Effect = partial
+# eta-squared. Returns NULL when the model cannot be fitted on these donors.
+.kgPhenoGroupLm <- function(y, grp, rid, cov.df, minN){
+  d <- data.frame(.y = as.numeric(y), .g = as.character(grp), stringsAsFactors = FALSE, check.names = FALSE)
+  d <- cbind(d, cov.df[rid, , drop = FALSE]); rownames(d) <- rid
+  d <- d[is.finite(d$.y) & stats::complete.cases(d), , drop = FALSE]
+  if(nrow(d) < minN) return(NULL)
+  tab <- table(d$.g); lev <- sort(names(tab)[tab > 0])
+  if(length(lev) < 2 || any(tab[lev] < 3)) return(NULL)
+  cv  <- .kgVaryingCovs(d, setdiff(names(d), c(".y", ".g")))
+  rhs <- if(length(cv)) paste0(" + ", paste(sprintf("`%s`", cv), collapse = " + ")) else ""
+  if(length(lev) == 2){
+    d$.g <- factor(d$.g, levels = lev)                       # lev[1] = reference, the term = lev[2] vs lev[1]
+    fit <- try(stats::lm(stats::as.formula(paste0(".y ~ .g", rhs)), data = d), silent = TRUE)
+    if(inherits(fit, "try-error")) return(NULL)
+    co <- summary(fit)$coefficients; tn <- paste0(".g", lev[2])
+    if(!(tn %in% rownames(co))) return(NULL)
+    est <- co[tn, "Estimate"]; sdy <- stats::sd(d$.y)
+    return(list(d = d, p = co[tn, "Pr(>|t|)"], stat = co[tn, "t value"],
+                dir = paste0("higher in ", if(est >= 0) lev[2] else lev[1]),
+                eff = if(is.finite(sdy) && sdy > 0) est / sdy else NA_real_, coef = est,
+                eff_type = "lm coefficient (SD units)"))
+  }
+  d$.g <- factor(d$.g, levels = lev)
+  f1 <- try(stats::lm(stats::as.formula(paste0(".y ~ .g", rhs)), data = d), silent = TRUE)
+  f0 <- try(stats::lm(stats::as.formula(paste0(".y ~ 1", rhs)), data = d), silent = TRUE)
+  if(inherits(f1, "try-error") || inherits(f0, "try-error")) return(NULL)
+  av <- try(stats::anova(f0, f1), silent = TRUE); if(inherits(av, "try-error")) return(NULL)
+  ssg <- av[["Sum of Sq"]][2]; ssr <- av[["RSS"]][2]
+  list(d = d, p = av[["Pr(>F)"]][2], stat = av[["F"]][2], dir = "differs across groups (non-directional)",
+       eff = if(is.finite(ssg + ssr) && (ssg + ssr) > 0) ssg / (ssg + ssr) else NA_real_, coef = NA_real_,
+       eff_type = "partial eta-squared")
+}
+
 .kgPhenoGroupImpl <- function(grouping, levels = "", phenotypes = "all",
                          covariates = "NA", use_raw = "false",
                          minN = "10", method = "auto", mode = "tool",
@@ -314,7 +358,9 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 
   if(identical(phenotypes,"all") || phenotypes == ""){
     cand <- setdiff(names(m), c("record_id", gcol, cov_names))
-    phen_cols <- cand[vapply(cand, function(cc) identical(.kgInferType(m[[cc]]), "cont"), logical(1))]
+    # continuous AND categorical phenotypes, as the Donor Cluster Explorer tests both (user 2026-10-19: "make all same as
+    # cluster page"); a categorical one is tested by chi-square below
+    phen_cols <- cand[vapply(cand, function(cc) .kgInferType(m[[cc]]) %in% c("cont", "disc"), logical(1))]
   } else {
     toks <- trimws(strsplit(phenotypes, ",")[[1]])
     phen_cols <- unique(stats::na.omit(vapply(toks, resolve_col, character(1))))
@@ -330,26 +376,85 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   #    N, Statistic, P_value and Direction are computed exactly as before.
   mraw <- if(tolower(use_raw) %in% c("true","1")) m else .kgLoadMetaFrame(TRUE)
   raw_rid <- if(!is.null(mraw)) as.character(mraw[["record_id"]]) else character(0)
+  # the old rank tests stay reachable by name only (`method = "wilcoxon"`); "auto" is the cluster page's tests
+  nonpar <- method %in% c("wilcoxon", "nonparametric", "rank")
   for(pc in phen_cols){
+    # -- A CATEGORICAL PHENOTYPE: chi-square of group x category, Cramer's V -- the Donor Cluster Explorer's test, covariates
+    #    or not (compareClusterPhenotypes: >= 10 donors with a value, every compared group present). No box (no numbers).
+    if(identical(.kgInferType(m[[pc]]), "disc")){
+      v <- as.character(m[[pc]][keep]); okv <- !is.na(v) & !(v %in% c("", "NA"))
+      if(sum(okv) < 10) next
+      tabc <- table(grp[okv], v[okv])
+      if(nrow(tabc) < 2 || ncol(tabc) < 2 || any(rowSums(tabc) == 0)) next
+      ct <- suppressWarnings(try(stats::chisq.test(tabc), silent = TRUE)); if(inherits(ct, "try-error")) next
+      nn <- sum(tabc); cvv <- sqrt(as.numeric(ct$statistic) / (nn * (min(dim(tabc)) - 1)))
+      rows[[length(rows)+1]] <- data.frame(
+        Phenotype = pc, N = nn, Groups = paste(glev, collapse = "/"),
+        Statistic = signif(as.numeric(ct$statistic), 3), P_value = signif(ct$p.value, 3),
+        Direction = "differs across groups (categorical)", Box = "",
+        Effect = signif(cvv, 3), Effect_type = "Cramer's V", Coefficient = NA_real_, stringsAsFactors = FALSE)
+      next
+    }
     y <- suppressWarnings(as.numeric(m[[pc]][keep])); names(y) <- rid
-    if(!is.null(cov.df)) y <- .kgResidualize(y, cov.df)
+    coef_raw <- NA_real_
+    if(!is.null(cov.df)){
+      # ⚠ WITH COVARIATES: THE CLUSTER PAGE'S LINEAR MODEL (user 2026-10-19: "align the method used for phenotype with
+      # covariate with what we do it using linear model in the cluster page"). It residualised the phenotype on the
+      # covariates over every donor and ran a Wilcoxon / Kruskal-Wallis on the residuals; the Donor Cluster Explorer
+      # (humanislets_statistics.R `compareClusterPhenotypes`) fits lm(value ~ group + covariates) and reads the group
+      # term. Same model here -- see `.kgPhenoGroupLm`. Without covariates nothing below changes.
+      L <- .kgPhenoGroupLm(y, grp, rid, cov.df, minN)
+      if(is.null(L)) next
+      yy <- setNames(L$d$.y, rownames(L$d)); gg <- as.character(L$d$.g)
+      p <- L$p; stat <- L$stat; dir <- L$dir; eff <- L$eff; eff_type <- L$eff_type; coef_raw <- L$coef
+    } else {
     yy <- y[is.finite(y)]; gg <- grp[match(names(yy), rid)]
     tab <- table(gg)
     if(length(yy) < minN || sum(tab >= 2) < 2) next   # need >= 2 groups each with >= 2 obs
     p <- NA_real_; stat <- NA_real_; dir <- ""
-    if(two){
+    eff <- NA_real_; eff_type <- ""
+    # -- NO COVARIATES: THE CLUSTER PAGE'S WELCH t-TEST (user 2026-10-19: "make all same as cluster page"), Cohen's d with the
+    #    pooled SD as its effect, >= 3 donors per group; positive = the SECOND level (Groups order) higher, as before. More
+    #    than two groups (the page never compares more than two): Welch's one-way ANOVA, eta-squared.
+    if(!nonpar && two){
+      a <- yy[gg == glev[2]]; b <- yy[gg == glev[1]]
+      if(length(a) < 3 || length(b) < 3) next
+      tt <- try(stats::t.test(a, b), silent = TRUE); if(inherits(tt, "try-error")) next
+      p <- tt$p.value; stat <- unname(tt$statistic)
+      sp <- sqrt(((length(a) - 1) * stats::var(a) + (length(b) - 1) * stats::var(b)) / (length(a) + length(b) - 2))
+      eff <- if(is.finite(sp) && sp > 0) (mean(a) - mean(b)) / sp else NA_real_
+      dir <- paste0("higher in ", if(mean(a) >= mean(b)) glev[2] else glev[1])
+      eff_type <- "Cohen's d"
+    } else if(!nonpar){
+      tabn <- table(gg); okg <- names(tabn)[tabn >= 3]; if(length(okg) < 2) next
+      sel <- gg %in% okg; yy <- yy[sel]; gg <- gg[sel]
+      ow <- try(stats::oneway.test(yy ~ factor(gg)), silent = TRUE); if(inherits(ow, "try-error")) next
+      p <- ow$p.value; stat <- unname(ow$statistic); dir <- "differs across groups (non-directional)"
+      av <- try(summary(stats::aov(yy ~ factor(gg)))[[1]], silent = TRUE)
+      if(!inherits(av, "try-error")) { ss <- av[["Sum Sq"]]; if(sum(ss) > 0) eff <- ss[1] / sum(ss) }
+      eff_type <- "eta-squared"
+    } else if(two){
       st <- if(method %in% c("t","ttest","parametric")) try(stats::t.test(yy ~ gg), silent = TRUE)
             else try(stats::wilcox.test(yy ~ gg, exact = FALSE), silent = TRUE)
       if(inherits(st, "try-error")) next
       p <- st$p.value; stat <- unname(st$statistic)
       med <- tapply(yy, gg, stats::median, na.rm = TRUE)
       dir <- if(med[[glev[2]]] >= med[[glev[1]]]) paste0("higher in ", glev[2]) else paste0("higher in ", glev[1])
+      # rank-biserial effect from the same ranks (Mann-Whitney U of the second level), whatever `method` tested
+      rk <- rank(yy); n1 <- sum(gg == glev[1]); n2 <- sum(gg == glev[2])
+      if(n1 > 0 && n2 > 0) eff <- 2 * (sum(rk[gg == glev[2]]) - n2 * (n2 + 1) / 2) / (n1 * n2) - 1
+      eff_type <- "rank-biserial"
     } else {
       st <- if(method %in% c("anova","parametric")) try(summary(stats::aov(yy ~ factor(gg)))[[1]][["Pr(>F)"]][1], silent = TRUE)
             else try(stats::kruskal.test(yy ~ factor(gg))$p.value, silent = TRUE)
       if(inherits(st, "try-error") || is.null(st) || is.na(st)) next
       p <- as.numeric(st); dir <- "differs across groups (non-directional)"
+      # epsilon-squared from the Kruskal-Wallis H of the same data, whatever `method` tested
+      kt <- try(stats::kruskal.test(yy ~ factor(gg)), silent = TRUE)
+      if(!inherits(kt, "try-error") && length(yy) > 1) eff <- unname(kt$statistic) / (length(yy) - 1)
+      eff_type <- "epsilon-squared"
     }
+    }   # (no covariates: the Welch tests above; the rank tests only when `method` names them)
     # -- THE BOX THE ANSWER IS DRAWN FROM, PER LEVEL (2026-09-19). F35's turn-2 view is
     #    `box | phenotype_set "surfaced" | annotate "group medians + adj_p per phenotype"`, drawn
     #    `from A(11)` -- this result. Only `Direction` left here, so the page had nothing to draw
@@ -370,12 +475,17 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
       Phenotype = pc, N = length(yy), Groups = paste(glev, collapse = "/"),
       Statistic = signif(stat, 3), P_value = signif(p, 3), Direction = dir,
       Box = paste(bx, collapse = "|"),
+      Effect = signif(eff, 3), Effect_type = eff_type,
+      Coefficient = signif(coef_raw, 4),
       stringsAsFactors = FALSE)
   }
   if(length(rows) == 0) return("RES-NO")
 
   out <- do.call(rbind, rows)
   out$Adjusted_p_value <- signif(stats::p.adjust(out$P_value, method = "BH"), 3)
+  # the effect columns go LAST, after Adjusted_p_value, so every existing column keeps its position; `Coefficient` (the
+  # linear model's group term in the phenotype's own units, NA without covariates) after them
+  out <- out[, c(setdiff(names(out), c("Effect", "Effect_type", "Coefficient")), "Effect", "Effect_type", "Coefficient")]
   out <- out[order(out$P_value), ]
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", s)
   utils::write.csv(out, paste0("kg_pheno_group_", safe(gcol), "_", ts, ".csv"), row.names = FALSE)

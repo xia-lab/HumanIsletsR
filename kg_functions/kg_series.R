@@ -111,7 +111,13 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   keep_ids <- keep_ids[!is.na(keep_ids)]
 
   # ---- covariates -> the residualisation basis for `value_adjusted` ----
-  covuniv <- if(covariates %in% c("none", "NA", "")) character(0)
+  # "default" = the engine's own default set (`.kgAssocDefaultCovs`, kg_assoc.R, sourced before this file by
+  # KgSeries.java) minus the tested phenotypes -- what kgAssoc fits when the question names no covariates (user
+  # 2026-10-19: "you must only send what is from the question"; the API no longer sends a list of its own). Small-n
+  # entities get none, as in kgAssoc (`.kgSmallNTypes`, applied per feature below).
+  use_default <- identical(covariates, "default")
+  covuniv <- if(use_default) setdiff(.kgAssocDefaultCovs, phenos)
+             else if(covariates %in% c("none", "NA", "")) character(0)
              else trimws(strsplit(covariates, "[,;]")[[1]])
   covuniv <- unique(covuniv[nzchar(covuniv) & covuniv %in% meta_names])
   covbase <- if(length(covuniv)){ cb <- .kgCoerce(m, covuniv); rownames(cb) <- rec; cb } else NULL
@@ -150,6 +156,10 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   ftoks <- .kgSplitFeatures(feat_raw, res); ftoks <- ftoks[nzchar(ftoks)]
   if(length(ftoks) == 0) return("RES-NO-FEATURE")
   lay_filter <- if(identical(layers, "all")) NULL else tolower(trimws(strsplit(layers, "[,;]")[[1]]))
+  # DNA methylation keys this call names (2026-10-19, user: "you need fix the box panel"): read off the methylation matrix
+  # below (`.kgLoadMethylation`, kg_common.R), as kgAssoc does -- the resolver holds no CpGs
+  meth_keys <- if(is.null(lay_filter)) character(0)
+               else intersect(unique(vapply(lay_filter, .kgLayerKey, character(1), USE.NAMES = FALSE)), .kgMethLayerKeys)
 
   rmap <- .kgResolveFeatures(res, ftoks, "auto")
   feats <- list()
@@ -166,7 +176,7 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
       }
     }
   }
-  if(length(feats) == 0) return("RES-NO-RESOLVE")
+  if(length(feats) == 0 && !length(meth_keys)) return("RES-NO-RESOLVE")
 
   con <- dbConnect(SQLite(), db.path); on.exit(dbDisconnect(con), add = TRUE)
   rows <- list()
@@ -187,7 +197,7 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
       sym <- FR$symbol[ri]
 
       # residualised values -- computed ONCE per feature, then looked up by donor
-      yadj <- if(!is.null(covbase)){
+      yadj <- if(!is.null(covbase) && !(use_default && f$etype %in% .kgSmallNTypes)){
                 cb <- covbase[intersect(dcommon, rownames(covbase)), , drop = FALSE]
                 .kgResidualize(y, cb)
               } else NULL
@@ -214,6 +224,36 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
         rows[[length(rows)+1]] <- data.frame(
           donor_id = don, feature = f$token, symbol = sym, feature_type = f$etype,
           layer = la$display,
+          value = as.numeric(y[don]),
+          value_adjusted = if(is.null(yadj)) NA_real_ else as.numeric(yadj[don]),
+          phenotype = ph, pheno_value = as.character(pv[don]), pheno_type = unname(phtypes[pi]),
+          n_donors = length(don), subset = subset_note, stringsAsFactors = FALSE)
+      }
+    }
+  }
+
+  # ---- DNA methylation: one row of the M-value matrix per CpG the features name (a cg id, or every CpG of a gene) ----
+  # The same donor / phenotype / residualisation rules as the layer loop above, so the plot matches kgAssoc's methylation
+  # rows (kg_assoc.R); `feature` is the CpG id, `symbol` its genes, `layer` the methylation display name.
+  for(mk in meth_keys){
+    L <- .kgLoadMethylation(mk); if(is.null(L)) next
+    cpgs <- .kgMethRows(L, ftoks); if(!length(cpgs)) next
+    dcommon <- intersect(colnames(L$mat), keep_ids); if(length(dcommon) < minN) next
+    for(cg in cpgs){
+      y <- L$mat[cg, dcommon]; names(y) <- dcommon
+      sym <- L$info$Symbol[match(cg, L$info$FeatureId)]
+      yadj <- if(!is.null(covbase)){
+                cb <- covbase[intersect(dcommon, rownames(covbase)), , drop = FALSE]
+                .kgResidualize(y, cb)
+              } else NULL
+      for(pi in seq_along(phenos)){
+        ph <- phenos[pi]
+        pv <- phframe[dcommon, ph]; names(pv) <- dcommon
+        ok  <- is.finite(y[dcommon]) & !is.na(pv) & !(as.character(pv) %in% c("", "NA"))
+        don <- dcommon[ok]
+        if(length(don) < minN) next
+        rows[[length(rows)+1]] <- data.frame(
+          donor_id = don, feature = cg, symbol = sym, feature_type = "cpg", layer = L$disp,
           value = as.numeric(y[don]),
           value_adjusted = if(is.null(yadj)) NA_real_ else as.numeric(yadj[don]),
           phenotype = ph, pheno_value = as.character(pv[don]), pheno_type = unname(phtypes[pi]),

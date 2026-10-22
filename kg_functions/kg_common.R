@@ -201,13 +201,24 @@
 
 # ---- phenotypes (metadata_sum_norm) ------------------------------------------
 # full metadata frame (character), keyed by record_id; cached per session by mtime.
-.kgLoadMetaFrame <- function(use_raw = FALSE){
+.kgLoadMetaFrame <- function(use_raw = FALSE, level = NULL){
   .kgSetPaths()
   f <- paste0(other.tables.path, "display_data/", if(use_raw) "metadata_sum_raw.csv" else "metadata_sum_norm.csv")
   if(!file.exists(f)) return(NULL)
   m <- utils::read.csv(f, check.names = FALSE, stringsAsFactors = FALSE)
-  # Multi-omics cluster: omics donors only (no donor-set choice here); the two bookkeeping columns are not phenotypes
-  if(exists(".cluster_v2_pheno", mode = "function")) m <- .cluster_v2_pheno(m, NULL, "record_id")
+  # ⚠ THE CLUSTER DONOR SET (2026-10-19, user: "use all available donors here"). Default = omics donors only, as before.
+  # `level` (high | highmed | all) adds the PREDICTED donors at that reliability — the website's own "Cluster donors"
+  # choice (filepath_utils.R `.fill_cluster_v2`, phenotype "cluster_v2.<level>"). The predicted donors kept are noted in
+  # `.kg_pred_ids` so a result can say how many it used; the two bookkeeping columns are never phenotypes.
+  .GlobalEnv$.kg_pred_ids <- character(0)
+  if(exists(".cluster_v2_pheno", mode = "function")){
+    if(!is.null(level) && all(c("cluster_v2", "cluster_v2_source", "cluster_v2_reliability") %in% names(m))){
+      keep <- m$cluster_v2_source %in% "predicted" & m$cluster_v2_reliability %in% .cluster_v2_reliabilities(level) &
+              !is.na(m$cluster_v2) & nzchar(as.character(m$cluster_v2))
+      .GlobalEnv$.kg_pred_ids <- as.character(m$record_id[keep])
+    }
+    m <- .cluster_v2_pheno(m, level, "record_id")
+  }
   m
 }
 
@@ -305,6 +316,44 @@
   if(any(notnum)) for(j in which(notnum)) sub[[j]] <- suppressWarnings(as.numeric(as.character(sub[[j]])))
   mat <- as.matrix(sub); rownames(mat) <- ids
   list(mat = mat, info = data.frame(FeatureId = ids, Symbol = sym, Gene_ID = entrez, stringsAsFactors = FALSE))
+}
+
+# ---- DNA METHYLATION, ONE ROW PER CpG (user 2026-10-19, Q5: "add methylation to the analysis omics layer ... we just do
+# normal analysis as other omics") ----------------------------------------------------------------------------------------
+# ⚠ ITS OWN FILE, NOT HI_omics_v2.sqlite: the M-value matrix the website's Omics View already analyses
+# (humanislets_statistics.R, `proc_methylation`: omics_processing_input/proc/proc_methylation_M.qs, 729,123 CpGs x 50 donors),
+# whose first columns are the COLLABORATOR'S annotation (feature_id, chr, pos_hg38, strand, gene, gene_region, cgi_relation,
+# cgi_name) -- the annotation `libraries/methylation_cpg_anno.qs` is built from, and the one the user ruled we use.
+# ⚠ TWO KEYS, ONE MATRIX. `methylation` = every CpG; `methylation_promoter` = the CpGs whose `gene_region` names a TSS
+# (TSS200 / TSS1500), the case study's promoter rule on this annotation (p33 / p34). A CpG belongs to EVERY gene its `gene`
+# field lists (";"-separated), as in methylation_cpg_anno.qs. Never a default layer: reached only by naming the key.
+.kgMethLayerKeys <- c("methylation", "methylation_promoter")
+.kgMethDisplay   <- c(methylation          = "DNA methylation (M-value)",
+                      methylation_promoter = "DNA methylation at promoters (M-value)")
+.kgLoadMethylation <- function(key){
+  .kgSetPaths()
+  f <- paste0(other.tables.path, "omics_processing_input/proc/proc_methylation_M.qs")
+  if(!file.exists(f) || !(key %in% .kgMethLayerKeys)) return(NULL)
+  MT <- as.data.frame(qs::qread(f), stringsAsFactors = FALSE)
+  if(!all(c("feature_id", "gene", "gene_region") %in% names(MT))) return(NULL)
+  if(identical(key, "methylation_promoter"))
+    MT <- MT[!is.na(MT$gene_region) & grepl("TSS", MT$gene_region), , drop = FALSE]
+  dc <- grep("^R[0-9]+$", names(MT), value = TRUE)
+  if(!length(dc) || !nrow(MT)) return(NULL)
+  ids <- as.character(MT$feature_id)
+  mat <- as.matrix(MT[, dc, drop = FALSE]); storage.mode(mat) <- "double"; rownames(mat) <- ids
+  gene <- as.character(MT$gene); gene[is.na(gene)] <- ""; gene <- gsub("\\s+", "", gene)
+  list(mat = mat, disp = .kgMethDisplay[[key]],
+       info = data.frame(FeatureId = ids, Symbol = gene, Gene_ID = NA_character_, stringsAsFactors = FALSE),
+       genes = strsplit(gene, "[;,]"))
+}
+# the CpGs a feature list names: a CpG id itself ("cg12345678"), or a gene symbol -> every CpG annotated to it
+.kgMethRows <- function(L, toks){
+  tk <- toupper(trimws(as.character(toks))); tk <- tk[nzchar(tk)]
+  if(!length(tk)) return(character(0))
+  gl <- L$genes; idx <- rep(seq_along(gl), lengths(gl)); gg <- toupper(unlist(gl))
+  hit <- unique(c(which(toupper(L$info$FeatureId) %in% tk), idx[gg %in% tk]))
+  L$info$FeatureId[sort(hit)]
 }
 
 # limma fit for ONE phenotype on a PRELOADED layer matrix (from .kgLoadLayerMatrix). Split
@@ -480,7 +529,7 @@
 # ⚠ `sym` MAPS THE LIBRARY KEY BACK TO A READABLE SYMBOL. fgsea's leadingEdge is expressed in
 # whatever the sets are keyed on (entrez for the gene libraries), which is unreadable in a tooltip.
 # The caller holds the Key -> Symbol map, so it is passed in rather than re-derived here.
-.kgFgsea <- function(ranks, library, fdr = 0.05, sym = NULL){
+.kgFgsea <- function(ranks, library, fdr = 0.05, sym = NULL, score_type = "std"){
   library(fgsea); .kgSetPaths()
   # ⚠ fgsea's p-values come from a permutation procedure, so WITHOUT A SEED the same question
   # on the same data returns slightly different numbers each run. Every deployed GSEA path
@@ -491,11 +540,20 @@
   if(is.null(lib)) return(NULL)
   ranks <- ranks[!is.na(ranks) & is.finite(ranks)]
   if(length(ranks) < 10) return(NULL)
-  # ⚠ 4 WORKERS, NOT THE DEFAULT (user 2026-10-05: "change the default 14 to 4 core"). With no nproc, fgsea takes
-  # BiocParallel's default (detectCores() - 2 = 14 on a 16-core machine) for EVERY call. MEASURED: results identical with
-  # 14 and 4 workers (all pathways, p, adj p, NES; seed 42).
+  # ⚠ ONE WORKER — NO FORKS INSIDE Rserve (user 2026-10-12: "go ahead with 1 worker"). With nproc = 4 BiocParallel forks
+  # three helpers inside the Rserve connection process; MEASURED 2026-10-12 on "Which genes are associated with type 2
+  # diabetes?" that process vanished mid-run and its three forks (PPID 1, 0% CPU) kept Payara's socket open, so the KEGG call
+  # hung until the API's 300 s cut-off. Run directly in R (diagnosis Type2-None, RNA-seq, 18,400 genes): KEGG 5.7 s -> 7.2 s,
+  # Reactome 7.7 s -> 11.0 s, results identical (all pathways, padj, NES; seed 42). History: no nproc = 14 workers, cut to 4
+  # on 2026-10-05 ("change the default 14 to 4 core").
+  # `score_type = "pos"` for an UNSIGNED statistic (DNA methylation's per-gene RRA score, `.kgMethylEnrich`, 2026-10-19);
+  # every other caller keeps fgsea's default "std" exactly as before
+  # ⚠ maxSize = 500, THE OMICS VIEW'S OWN LIMIT (performGSEA and .runMethylationGSEA in humanislets_statistics.R; user 2026-10-19:
+  # "add maxSize = 500 ... so it matches the Omics View"). Without it the kg path also tested pathways over 500 genes (KEGG
+  # "Metabolic pathways"), which shifted fgsea's seeded sampling and the BH count: MEASURED on the S6A ComBat ranked list,
+  # ECM-receptor NES 1.96 / P_adj 0.0014 here vs 1.94 / 0.0015 in the Omics View; with the same limit both give 1.94 / 0.0015.
   res <- try(fgsea::fgsea(pathways = lib$sets, stats = ranks,
-                          minSize = .kgLibMinSize(library), nproc = 4), silent = TRUE)
+                          minSize = .kgLibMinSize(library), maxSize = 500, scoreType = score_type, nproc = 1), silent = TRUE)
   if(inherits(res, "try-error") || is.null(res) || nrow(res) == 0) return(NULL)
   res <- as.data.frame(res)
   nm  <- if(!is.null(lib$term)) setNames(lib$term, names(lib$sets)) else NULL

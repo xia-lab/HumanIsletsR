@@ -7,7 +7,7 @@
 #   * metadata_sum_norm / _raw are built IN MEMORY and each written ONCE
 #     (no write-then-read-back-then-rewrite).
 #   * Every output file is written exactly once.
-#   * Donor clusters: final_cluster = the OLD clusters "C0".."C4" (states.path, kept unchanged);
+#   * Donor clusters: final_cluster (the OLD clusters "C0".."C4") is no longer written (removed 2026-10-15);
 #     cluster_v2 = the frozen v2 clusters "C1".."C4" (= Cluster 1-4; were "G0".."G3" before 2026-10-03),
 #     every donor (omics + predicted) with cluster_v2_source / cluster_v2_reliability; each calculation picks its
 #     donors from these, default omics donors only (cluster_v2.path = cluster_live_v2/donor_cluster.csv).
@@ -593,7 +593,6 @@ redcap_export_fun <- function(api_token,
   # ensure the 3 Alice-only calc_ columns are present even if not in raw_variable_summary
   for (c in setdiff(MITO_COLS, colnames(metadata_norm)))
     metadata_norm[[c]] <- mito_norm[[c]][match(metadata_norm$record_id, mito_norm$record_id)]
-  metadata_norm$final_cluster <- cluster_labels(metadata_norm$record_id, states.path, "C")
   metadata_norm <- add_cluster_v2(metadata_norm, cluster_v2.path)
   wcsv(metadata_norm, "metadata_sum_norm.csv")
 
@@ -602,7 +601,6 @@ redcap_export_fun <- function(api_token,
   metadata_raw <- set_cols(metadata_raw, function_summary, intersect(fs_cols,  colnames(metadata_raw)))
   for (c in setdiff(MITO_COLS, colnames(metadata_raw)))
     metadata_raw[[c]] <- mito_out[[c]][match(metadata_raw$record_id, mito_out$record_id)]
-  metadata_raw$final_cluster <- cluster_labels(metadata_raw$record_id, states.path, "C")
   metadata_raw <- add_cluster_v2(metadata_raw, cluster_v2.path)
   wcsv(metadata_raw, "metadata_sum_raw.csv")
 
@@ -628,22 +626,13 @@ redcap_export_fun <- function(api_token,
   tables$seahorse_norm_dna[, -c(1:2)] <- lapply(tables$seahorse_norm_dna[, -c(1:2)], as.numeric)
   tables$seahorse_outcome <- mito_out
   tables$raw_variable_summary <- raw_variable_summary
-  # proc_metadata = normalized metadata + donor-state label (final_cluster) from the
-  # endotype deliverable's `cluster` column, matched by donor_id. The metadata_sum_*.csv
-  # files carry final_cluster and cluster_v2 too (step 8), as the files in use do.
-  donor_states <- read.csv(states.path)
+  # proc_metadata = normalized metadata + the cluster_v2 columns, as metadata_sum_*.csv (step 8).
+  # The old clusters (final_cluster, "C0".."C4") are no longer written (removed 2026-10-15).
   proc_metadata <- metadata_norm
-  # the interface expects final_cluster as "C0".."C4" (atlas/kg-search filter on that);
-  # donor_states$cluster is 0..4, so prefix "C". NA stays NA (donors with no cluster).
-  cl <- donor_states$cluster[match(proc_metadata$record_id, donor_states$donor_id)]
-  proc_metadata$final_cluster <- ifelse(is.na(cl), NA, paste0("C", cl))
   proc_metadata <- add_cluster_v2(proc_metadata, cluster_v2.path)
   tables$proc_metadata <- proc_metadata
 
-  # also carry final_cluster on the donor table (the old pipeline had it there, and the
-  # interface may read the label from `donor`). Same 0..4 -> "C0".."C4" mapping.
-  cld <- donor_states$cluster[match(tables$donor$record_id, donor_states$donor_id)]
-  tables$donor$final_cluster <- ifelse(is.na(cld), NA, paste0("C", cld))
+  # the donor table carries the cluster_v2 columns too
   tables$donor <- add_cluster_v2(tables$donor, cluster_v2.path)
 
   sqlite.tables <- c("computed","donor","ephys_cell","ephys_donor","gsis","isolation",

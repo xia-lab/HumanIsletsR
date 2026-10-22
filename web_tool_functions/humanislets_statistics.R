@@ -1597,8 +1597,7 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
       culprits <- culprits[order(n.missing[culprits], decreasing = TRUE)]
       lst <- paste0(vapply(culprits, function(v){
                paste0("'", label.of(v), "' is missing for ", n.missing[[v]], " of ",
-                      nrow(meta.cand), " donors",
-                      if(identical(v, analysisVar)) " (this is your variable of interest)" else "")
+                      nrow(meta.cand), " donors")
              }, character(1)), collapse = "; ")
       # Of the control variables, which single one gives back the most donors?
       # Only suggest it when dropping it actually clears the threshold -- a hint
@@ -1953,10 +1952,27 @@ if(omicsType == "proc_methylation"){
   feature_table <- feature_table[feature.keep, , drop = FALSE]
   feature_info <- feature_info[feature.keep, , drop = FALSE]
  }
+  # If no feature reached its minimum, stop here with the reason.
+  # Without this the empty matrix reached limma ("expression matrix has zero rows"), RCenter
+  # swallowed the R error and returned null, and the page spun forever. (2026-10-15)
+  # The message states 10, the intent in the comment above; the filter above is still >= 9
+  # and is to be raised to 10 to match. Metabolites use 5 for both.
+  min.feat <- if(omicsType != "proc_metabolite") 10 else 5
+  if(!any(feature.keep)){
+    if(nrow(metadata) < min.feat){
+      return(.explainMissingVars(meta.cand, all.vars, analysisVar, meta.info,
+        paste0("Only ", nrow(metadata), " of ", nrow(meta.cand),
+               " donors with this omics data have a value for every selected variable (at least ",
+               min.feat, " are needed)."), min.feat))
+    }
+    return(paste0("RES-NO; No feature has a value in at least ", min.feat, " donors."))
+  }
   # filter by donors
   if(donors == "subset"){
     donor.list <- readRDS("donors.rds")
-    feature_table <- feature_table[,colnames(feature_table) %in% donor.list]
+    # drop = FALSE: with exactly one surviving donor the matrix otherwise collapses to a vector,
+    # dim() becomes NULL and the n.samps check below errors ("argument is of length zero").
+    feature_table <- feature_table[,colnames(feature_table) %in% donor.list, drop = FALSE]
     metadata <- metadata[metadata$record_id %in% donor.list, ]
     meta.cand <- meta.cand[meta.cand$record_id %in% donor.list, ]
   }
@@ -1964,7 +1980,7 @@ if(omicsType == "proc_methylation"){
   # for pairwise discrete comparisons, keep only the two selected groups
   if(analysis.type == "disc" && contrast != "anova"){
     metadata <- metadata[metadata[,analysisVar] %in% c(ref, contrast), ]
-    feature_table <- feature_table[,colnames(feature_table) %in% metadata$record_id]
+    feature_table <- feature_table[,colnames(feature_table) %in% metadata$record_id, drop = FALSE]
     meta.cand <- meta.cand[meta.cand[,analysisVar] %in% c(ref, contrast), ]
   }
   # the compared groups, for the pathway heatmap (plotPathwayHeatmap shows only these donors)
@@ -2414,7 +2430,9 @@ PatchseqSpearman <- function(
   metadata <- na.omit(metadata)
   rownames(metadata) <- metadata$cell_id
   feature_table <- feature_table[,colnames(feature_table) %in% metadata$cell_id]
-   if(dim(metadata)[1] < 10){return("RES-NO")}
+   if(dim(metadata)[1] < 10){
+     return(paste0("RES-NO; Only ", dim(metadata)[1], " cells have both single-cell expression data and a value for the selected variable (at least 10 are needed)."))
+   }
   
   # make sure metadata and omics data donors are in the same order
   feature_table <- feature_table[,match(metadata$cell_id, colnames(feature_table))]
@@ -2422,7 +2440,9 @@ PatchseqSpearman <- function(
   if(donors == "subset"){
     donor.list <- readRDS("donors.rds")
     cells.keep <- metadata$cell_id[metadata$record_id %in% donor.list]
-    feature_table <- feature_table[,colnames(feature_table) %in% cells.keep]
+    # drop = FALSE: with exactly one surviving cell the matrix otherwise collapses to a vector,
+    # dim() becomes NULL and the n.cells check below errors ("argument is of length zero").
+    feature_table <- feature_table[,colnames(feature_table) %in% cells.keep, drop = FALSE]
     metadata <- metadata[metadata$cell_id %in% cells.keep, ]
   }
 
@@ -2430,7 +2450,7 @@ PatchseqSpearman <- function(
   n.samps <- length(unique(metadata$record_id))
   n.cells <- dim(feature_table)[2]
   if(n.cells < 10){
-    return("RES-NO")
+    return(paste0("RES-NO; Only ", n.cells, " cells remain in the selected donor subset (at least 10 are needed)."))
    }
   
   # make dir: savedAnalysis
@@ -2472,7 +2492,7 @@ PatchseqSpearman <- function(
     res$avg.level <- apply(feature_table, 1, mean, na.rm = TRUE)
     res <- na.omit(res)
   } else {
-    return("RES-NO")
+    return(paste0("RES-NO; The correlation could not be computed: ", conditionMessage(attr(res, "condition"))))
   }
     
 

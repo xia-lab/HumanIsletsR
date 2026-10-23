@@ -802,3 +802,64 @@
 # Every RES-OK / RES-NO* / RES-TOO-* RETURN passes through untouched: tryCatch sees
 # conditions, not return values, so "no data" and "crashed" stay distinct answers.
 kgAssoc <- function(...) .kgGuard("kgAssoc", .kgAssocImpl, ...)
+
+# ---- SEVERAL NAMED SETS IN ONE CALL (2026-10-22, user: "go ahead with running several sets in one R call") -------------
+# A question naming several sets ("Are Hippo and Wnt pathway promoters less methylated than other gene promoters in Cluster 2
+# compared with Cluster 1 …?") was answered by one kgAssoc call per set, and each call paid the same fixed cost again: the
+# scripts sourced (~5 s), the layer read (methylation .qs, 2.7 s) and the full-layer fit (limma, 1.6 s per phenotype) --
+# MEASURED 2026-10-19: 14.4 s per call at load 5.6, 71-76 s each under load. Here every set runs the SAME guarded call
+# (`kgAssoc`) with its own members, in ITS OWN user folder (a sibling of this one, made by /login), so each set's files,
+# rows, set test, adjustments and RES code are exactly those of its own call. Only what does not depend on the members is
+# shared, through a cache that lives for this call only: the layer reads and the full-layer fits.
+# `sets` = "<user folder>=<members>||<user folder>=<members>…" (members as `features` takes them; the folders must exist).
+# Returns "RES-SETS;<set 1's code>||<set 2's code>…", one code per set, in the order given.
+.kgMemoKey <- function(a){
+  part <- function(x){
+    if(is.null(x)) return("NULL")
+    if(is.matrix(x) || is.data.frame(x)){
+      rn <- rownames(x); cn <- colnames(x)
+      return(paste0("M", nrow(x), "x", ncol(x), "|", paste(utils::head(rn, 3), collapse = ","), "|",
+                    paste(utils::tail(rn, 3), collapse = ","), "|", paste(cn, collapse = ",")))
+    }
+    if(is.list(x)) return(paste0("L(", paste(names(x), vapply(x, part, character(1)), sep = "=", collapse = ";"), ")"))
+    if(is.atomic(x)) return(if(length(x) <= 64) paste0("A", paste(as.character(x), collapse = ","))
+                            else paste0("A", length(x), "|", paste(utils::head(x, 3), collapse = ","), "|",
+                                        paste(utils::tail(x, 3), collapse = ",")))
+    NA_character_                                   # a DB connection: not part of what is computed
+  }
+  k <- vapply(a, part, character(1)); k <- k[!is.na(k)]
+  paste(names(a), k, sep = "=", collapse = "&")
+}
+.kgAssocSetsImpl <- function(features = "", phenotypes = "", layers = "all", covariates = "default", subset = "all",
+                             contrast = "", ref = "", fdr_family = "query", minN = "10", method = "auto", mode = "tool",
+                             set_test = "", sets = ""){
+  parts <- strsplit(as.character(sets), "||", fixed = TRUE)[[1]]
+  parts <- trimws(parts[nzchar(trimws(parts))])
+  if(!length(parts) || !all(grepl("=", parts, fixed = TRUE))) return("RES-NO-FEATURE")
+  dirs <- trimws(sub("=.*$", "", parts)); mems <- trimws(sub("^[^=]*=", "", parts))
+  wd0 <- getwd(); root <- dirname(wd0)
+  if(any(!grepl("^[A-Za-z0-9_]+$", dirs)) || any(!dir.exists(file.path(root, dirs))) || any(!nzchar(mems)))
+    return("RES-NO-FEATURE")
+  memo <- c(".kgLoadLayerMatrix", ".kgLoadMethylation", ".kgLimmaFit", ".kgKendallFit")
+  memo <- memo[vapply(memo, exists, logical(1), envir = .GlobalEnv, inherits = FALSE)]
+  orig <- mget(memo, envir = .GlobalEnv)
+  on.exit({ setwd(wd0); for(n in names(orig)) assign(n, orig[[n]], envir = .GlobalEnv) }, add = TRUE)
+  cache <- new.env(parent = emptyenv())
+  for(n in memo) local({
+    f0 <- orig[[n]]; nm <- n
+    assign(nm, function(...){
+      a <- list(...); k <- paste0(nm, "#", .kgMemoKey(a))
+      if(exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
+      v <- f0(...); assign(k, v, envir = cache); v
+    }, envir = .GlobalEnv)
+  })
+  codes <- character(length(parts))
+  for(i in seq_along(parts)){
+    setwd(file.path(root, dirs[i]))
+    codes[i] <- as.character(kgAssoc(features = mems[i], phenotypes = phenotypes, layers = layers, covariates = covariates,
+                                     subset = subset, contrast = contrast, ref = ref, fdr_family = fdr_family, minN = minN,
+                                     method = method, mode = mode, set_test = set_test))[1]
+  }
+  paste0("RES-SETS;", paste(codes, collapse = "||"))
+}
+kgAssocSets <- function(...) .kgGuard("kgAssocSets", .kgAssocSetsImpl, ...)

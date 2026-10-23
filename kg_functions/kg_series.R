@@ -86,7 +86,21 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   # a plot is per-feature: refuse a whole-layer dump rather than emit one
   if(identical(tolower(feat_raw), "all")) return("RES-NO-FEATURE")
 
-  m <- .kgLoadMetaFrame(use_raw = tolower(trimws(use_raw)) %in% c("true", "1", "yes"))
+  # ⚠ "cluster_v2.<level>" = the multi-omics cluster WITH its predicted donors (2026-10-22, user: "box plot uses the same
+  # cluster donors as the test"). Read exactly as kgAssoc reads it (kg_assoc.R, 2026-10-19): the level off the name, the
+  # metadata loaded at that level, the plain column plotted. MEASURED: a cluster comparison's test used every clustered
+  # donor (methylation 30, Nanostring 157, pseudobulk alpha 26 / beta 13) while this plot drew the omics-clustered ones only
+  # (24, 128, 24, 12). Rows then say which donors carry a predicted cluster (`predicted`). Any other phenotype is untouched.
+  cv2lv <- NULL
+  if(exists(".cluster_v2_level", mode = "function")){
+    .pt0 <- trimws(strsplit(phenotypes, "[,;]")[[1]])
+    .lv0 <- unlist(lapply(.pt0, .cluster_v2_level))
+    if(length(.lv0)){
+      cv2lv <- .lv0[1]
+      phenotypes <- paste(vapply(.pt0, .cluster_v2_base, character(1)), collapse = ",")
+    }
+  }
+  m <- .kgLoadMetaFrame(use_raw = tolower(trimws(use_raw)) %in% c("true", "1", "yes"), level = cv2lv)
   if(is.null(m)) return("RES-NO-META")
   meta_names <- names(m); rec <- as.character(m[["record_id"]])
 
@@ -266,6 +280,7 @@ kgSeries <- function(features = "", phenotypes = "", layers = "all",
   if(pheno_only) rows <- rows_pheno
   if(length(rows) == 0) return("RES-NO")
   out <- do.call(rbind, rows)
+  if(!is.null(cv2lv)) out$predicted <- as.character(out$donor_id) %in% .GlobalEnv$.kg_pred_ids
 
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
   safe <- function(s) gsub("[^A-Za-z0-9]", "_", substr(s, 1, 30))

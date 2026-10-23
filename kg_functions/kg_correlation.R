@@ -206,8 +206,20 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   }
   toks_a <- .split_side(pheno_a); toks_b <- .split_side(pheno_b)
   if(length(toks_a) > 1 && length(toks_b) > 1) return("RES-TOO-BROAD")
-  cols_a <- unique(stats::na.omit(vapply(toks_a, resolve_pheno, character(1))))
-  cols_b <- unique(stats::na.omit(vapply(toks_b, resolve_pheno, character(1))))
+  # ⚠ "all" ON ONE SIDE = EVERY MEASURED CONTINUOUS PHENOTYPE (2026-10-22, user: "we need give a trend follow BMI"; "also a trend"
+  # for age). The contract above names 'all' and this function never read it: MEASURED on the live API, "Which phenotypes correlate
+  # with BMI?" sent phenoB="all" and got RES-NO-RESOLVE, so the screen of every phenotype along one measure never ran. The columns
+  # are the continuous ones (`.kgInferType` "cont", as kgPhenoGroup reads them) minus record_id and the covariates; the pairs then
+  # take the many-pair path unchanged (BH over the pairs). "all" on BOTH sides is a matrix, not this question.
+  .is_all <- function(t) length(t) == 1 && identical(tolower(t), "all")
+  if(.is_all(toks_a) && .is_all(toks_b)) return("RES-TOO-BROAD")
+  .cov_excl <- if(identical(covariates, "NA") || covariates == "") character(0) else trimws(strsplit(covariates, ",")[[1]])
+  .all_cont <- function(){
+    cand <- setdiff(names(m), c("record_id", .cov_excl))
+    cand[vapply(cand, function(cc) identical(.kgInferType(m[[cc]]), "cont"), logical(1))]
+  }
+  cols_a <- if(.is_all(toks_a)) .all_cont() else unique(stats::na.omit(vapply(toks_a, resolve_pheno, character(1))))
+  cols_b <- if(.is_all(toks_b)) .all_cont() else unique(stats::na.omit(vapply(toks_b, resolve_pheno, character(1))))
   if(length(cols_a) == 0 || length(cols_b) == 0) return("RES-NO-RESOLVE")
   if(length(cols_a) > 1 || length(cols_b) > 1)
     return(.kgPhenoCorrMany(m, cols_a, cols_b, covariates, minN, method))
@@ -345,6 +357,16 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 
   # restrict to requested levels (pairwise); empty = ALL non-blank levels (omnibus)
   want <- if(identical(levels,"") || is.null(levels)) character(0) else trimws(strsplit(levels, ",")[[1]])
+  # ⚠ A POOLED GROUP (2026-10-22, user: "this should include type 1 and type 2 and compare to no diabetes"): a level written "A|B"
+  # is ONE group made of the values A and B, labelled "A+B" in every output ("|" already joins the levels in `Box`). Every other
+  # level is read exactly as before.
+  if(length(want) > 0 && any(grepl("|", want, fixed = TRUE))){
+    for(i in which(grepl("|", want, fixed = TRUE))){
+      parts <- trimws(strsplit(want[i], "|", fixed = TRUE)[[1]]); lab <- paste(parts, collapse = "+")
+      grp[!is.na(grp) & grp %in% parts] <- lab
+      want[i] <- lab
+    }
+  }
   keep <- !is.na(grp) & !(grp %in% c("", "NA"))
   if(length(want) > 0) keep <- keep & (grp %in% want)
   grp <- grp[keep]; rid <- rid[keep]

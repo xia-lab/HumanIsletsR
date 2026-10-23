@@ -1564,6 +1564,44 @@ performMummichog <- function(funcLib = "hsa_kegg", fdr = 0.05, permNum = 100,
 }
 
 
+
+## Wilcoxon rank-sum test next to limma for a two-group comparison (2026-10-22).
+## Same features and donors limma used. presto::wilcoxauc stops on missing values, so a
+## feature with gaps is tested on its own non-missing donors with base R's wilcox.test
+## (normal approximation with continuity correction, as presto). One presto call per gap
+## pattern took ~30 s for pseudobulk (3,221 patterns); per-feature wilcox.test takes seconds.
+## Returns a data.frame (rownames = feature ids): auc = P(contrast > ref), pval.
+.wilcoxTwoGroup <- function(feature_table, metadata, analysisVar, ref, contrast){
+  X <- as.matrix(feature_table)
+  g <- as.character(metadata[match(colnames(X), metadata$record_id), analysisVar])
+  keep <- g %in% c(ref, contrast)
+  X <- X[, keep, drop = FALSE]; g <- g[keep]
+  out <- data.frame(auc = rep(NA_real_, nrow(X)), pval = NA_real_, row.names = rownames(X))
+  run <- function(rows, cols){
+    w <- presto::wilcoxauc(X[rows, cols, drop = FALSE], g[cols], verbose = FALSE)
+    w <- w[w$group == contrast, ]
+    hit <- match(w$feature, rownames(out))
+    out$auc[hit]  <<- w$auc
+    out$pval[hit] <<- w$pval
+  }
+  na <- is.na(X)
+  full <- rowSums(na) == 0
+  if(any(full)) run(which(full), seq_len(ncol(X)))
+  if(any(!full)){
+    idx <- which(!full)
+    res <- vapply(idx, function(i){
+      ok <- !na[i, ]
+      x1 <- X[i, ok & g == contrast]; x0 <- X[i, ok & g == ref]
+      if(length(x1) == 0 || length(x0) == 0) return(c(NA_real_, NA_real_))
+      wt <- suppressWarnings(wilcox.test(x1, x0, exact = FALSE, correct = TRUE))
+      c(unname(wt$statistic) / (length(x1) * length(x0)), wt$p.value)   # AUC = U / (n1 * n0)
+    }, numeric(2))
+    out$auc[idx]  <- res[1, ]
+    out$pval[idx] <- res[2, ]
+  }
+  out
+}
+
 ## Explain WHY a complete-case filter left too few donors.
 ## DonorRegression drops any donor missing ANY selected variable, so one sparse
 ## control variable can wipe out the analysis. It used to return a bare "RES-NO",
@@ -2237,6 +2275,25 @@ if(omicsType == "proc_methylation"){
 
   # Remove results rows with NAs
   res.table <- res.table[!is.na(res.table$P.Value), ]  
+  # Wilcoxon rank-sum next to limma: two-group comparisons only, not methylation (~729k CpGs),
+  # only when limma's model has NO covariate (Wilcoxon cannot adjust; this includes the batch that
+  # combined proteomics / raw metabolomics add automatically -- 17 of 21 Type 2 proteomics donors
+  # are in batch 1), and only when BOTH groups have at least 20 donors (fewer: it found 0 genes or
+  # was erratic in subsampling of bulk RNA-seq; de_subsample_wilcoxon_20261022.csv).
+  # Adjusted over the same features as limma's adjusted p. Skipped if presto is not installed.
+  wilcox.min.n <- 20
+  wilcox.tab <- NULL
+  if(analysis.type == "disc" && contrast != "anova" && !grepl("methylation", omicsType) &&
+     length(setdiff(all.vars, analysisVar)) == 0 &&
+     min(sum(metadata[, analysisVar] == ref, na.rm = TRUE), sum(metadata[, analysisVar] == contrast, na.rm = TRUE)) >= wilcox.min.n &&
+     requireNamespace("presto", quietly = TRUE)){
+    wilcox.tab <- tryCatch({
+      w <- .wilcoxTwoGroup(feature_table[rownames(feature_table) %in% rownames(res.table), , drop = FALSE],
+                           metadata, analysisVar, ref, contrast)
+      w$padj <- p.adjust(w$pval, method = "fdr")
+      w
+    }, error = function(e) { print(paste("Wilcoxon skipped:", conditionMessage(e))); NULL })
+  }
   # Process results for output
  if(omicsType == "proc_metabolite"){
   res.table <- merge(
@@ -2339,6 +2396,18 @@ if(omicsType == "proc_methylation"){
     sig.down <- sum(res.table$P_value < pvalThresh & res.table[,2] < 0)
   }
  
+  # Wilcoxon columns go last, so every column position read downstream is unchanged.
+  # The feature id column differs by omics type, so match on the column holding limma's row ids.
+  if(!is.null(wilcox.tab)){
+    match.share <- vapply(res.table, function(v) mean(as.character(v) %in% rownames(wilcox.tab)), numeric(1))
+    hit <- match(as.character(res.table[[which.max(match.share)]]), rownames(wilcox.tab))
+    if(max(match.share) > 0.9){
+      res.table$`Wilcoxon AUC` <- wilcox.tab$auc[hit]
+      res.table$`Wilcoxon p_value` <- wilcox.tab$pval[hit]
+      res.table$`Wilcoxon adjusted p_value` <- wilcox.tab$padj[hit]
+    }
+  }
+
   # Methylation's full table is ~90MB; fwrite is ~18x faster than write.csv and
   # produces a standard CSV. No methylation backend path re-reads this file
   # (only the user downloads it). Other omics keep write.csv -> byte-identical.

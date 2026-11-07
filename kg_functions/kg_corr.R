@@ -336,7 +336,14 @@
   out  <- out[!is.na(prim), , drop = FALSE]; prim <- prim[!is.na(prim)]
   if(nrow(out) == 0) return("RES-NO")
 
-  if(identical(fdr_family, "query")) out$P_family <- signif(stats::p.adjust(prim, method = "BH"), 4)
+  if(identical(fdr_family, "query")) {
+    out$P_family <- signif(stats::p.adjust(prim, method = "BH"), 4)
+    # -- EACH METHOD HAS ITS OWN ADJUSTED p (2026-10-24, user: "yes do both" — the 2026-10-07 rule "why two method one adj" that
+    #    kg_correlation.R already follows). Same rule (BH) over the same pairs, one column per method, appended so every existing
+    #    column keeps its place; `P_family` is unchanged. A method that was not run stays NA.
+    out$Pearson_adj  <- signif(stats::p.adjust(out$Pearson_p,  method = "BH"), 4)
+    out$Spearman_adj <- signif(stats::p.adjust(out$Spearman_p, method = "BH"), 4)
+  }
   out <- out[order(prim), , drop = FALSE]
 
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S"); safe <- function(s) gsub("[^A-Za-z0-9]", "_", substr(s, 1, 24))

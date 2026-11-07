@@ -26,7 +26,7 @@
 #   subset      "all" | "col=value" (donor subset before fitting)
 #   contrast    categorical only: "A-B" (A vs B) | "anova" | "" (auto: 2-level = A-B,
 #               >=3 levels = omnibus F)
-#   fdr_family  "query" (BH across exactly the tests asked -> P_family; NEVER genome-wide)
+#   fdr_family  "query" (BH across exactly the tests asked, WITHIN EACH KIND = `Entity` -> P_family; NEVER genome-wide)
 #               | "none" | "genomewide" (screen only: copies limma's genome-wide adj-p)
 #   method      "auto" (DEFAULT) | "lm" | "limma" | "kendall"
 #               auto = KENDALL when the layer is `contaminant`, otherwise the normal split
@@ -55,6 +55,13 @@
 #   | "RES-NO-FEATURE" | "RES-NO-RESOLVE" | "RES-NO-RESOLVER".
 # ==============================================================================
 
+# ⚠ AN OPEN DNA-METHYLATION SCREEN TESTS THE 50,000 MOST VARIABLE CpGs (2026-10-23, user: "go with 50000, apply it"). The CpGs
+# are ranked by their SD over the call's donors, the phenotype never looked at (independent filtering), so the FDR stays valid.
+# MEASURED on insulin secretion at 16.7 mM, 49 donors (knowledge_graph/ingestion/mig_qc/qc_methylation_variance_filter_20261023):
+# all 729,123 CpGs = fit 18.7 s + write 5.4 s (81 MB), 0 significant; top 50,000 = 0.8 s + 0.4 s (5.6 MB), 2 significant.
+# The same number as the DIABLO methylation variance step. A call that NAMES CpGs or genes keeps the full-layer fit (they are
+# extracted after it). Mirrored in generate_reason_v3 `METH_SCREEN_TOP`, which the answer states — keep the two equal.
+.kgMethScreenTop <- 50000
 .kgAssocDefaultCovs <- c("donorage", "donorsex", "bodymassindex", "predistributionculturetime")   # purity dropped 2026-09-04 to match the precompute default (4 covariates)
 
 # ENTITY SCOPE: gene, metabolite, contaminant and reaction(flux) all run through the SAME
@@ -169,6 +176,79 @@
 # token contains ";" or "|". So: ";"/"|" are ALWAYS separators; "," is a separator only when
 # the whole string is not itself one resolvable token. Keeps "INS,GCG,PDX1" working while
 # never shredding a comma-bearing compound name.
+# ------------------------------------------------------------------------------------------------
+# .kgJointCell -- the COMBINED EFFECT of several named features on ONE outcome (2026-10-30, item 2b; user 10-29: "list, and
+# [combined] are two different thing"). ONE model with all of them, the outcome as the response:
+#   continuous outcome -> lm(outcome ~ A + B + covariates); the combined test is the F test of A + B against the covariates
+#                         alone, Effect = the extra share of the outcome's variation they explain (R2 change, "jointR2change");
+#   two-group outcome  -> the same as a logistic model (A = 1, B = 0, "rest" as in `.kgLmCell`); likelihood-ratio test,
+#                         Effect = the change in deviance explained (McFadden, "jointDevianceChange").
+# Each feature also gets its own row: its slope (log odds ratio) per unit of its stored value with the others held fixed
+# ("partialSlope" / "partialLogOR"). A >2-level outcome with no named contrast, a model that does not converge, or a feature the
+# fit drops (collinear) -> NULL: no rows rather than a half-answer. The covariates (narrowed to those that vary, `.kgVaryingCovs`)
+# and the N rule are those of `.kgLmCell`; the model needs at least (features + covariates + 3) complete donors.
+# X = donor x feature matrix (stored values, columns named by symbol); ph = named outcome; covdf = donor x covariate frame or NULL.
+# ------------------------------------------------------------------------------------------------
+.kgJointCell <- function(X, ph, covdf, ptype, contrast = "", ref = "", minN = 10){
+  don <- intersect(rownames(X), names(ph))
+  if(!is.null(covdf) && ncol(covdf)) don <- intersect(don, rownames(covdf))
+  if(length(don) < minN) return(NULL)
+  k <- ncol(X); xn <- paste0(".x", seq_len(k))
+  d <- data.frame(.ph = ph[don], stringsAsFactors = FALSE)
+  for(i in seq_len(k)) d[[xn[i]]] <- as.numeric(X[don, i])
+  if(!is.null(covdf) && ncol(covdf)) d <- cbind(d, covdf[don, , drop = FALSE])
+  covn <- setdiff(names(d), c(".ph", xn))
+  if(ptype == "cont"){
+    d$.ph <- suppressWarnings(as.numeric(as.character(d$.ph)))
+    fam <- NULL
+  } else {
+    d$.ph <- as.character(d$.ph)
+    d <- d[!is.na(d$.ph) & d$.ph != "" & d$.ph != "NA", , drop = FALSE]
+    if(identical(ref, "rest") && nzchar(contrast) && !identical(contrast, "anova"))
+      d$.ph <- ifelse(d$.ph == contrast, contrast, "rest")
+    named <- nzchar(contrast) && !identical(contrast, "anova")
+    lv <- unique(d$.ph)
+    if(named){ a <- contrast; b <- ref } else if(length(lv) == 2){ a <- lv[1]; b <- lv[2] } else return(NULL)
+    d <- d[d$.ph %in% c(a, b), , drop = FALSE]
+    d$.ph <- as.integer(d$.ph == a)
+    fam <- stats::binomial()
+  }
+  d <- d[stats::complete.cases(d), , drop = FALSE]
+  if(nrow(d) < max(minN, k + length(covn) + 3)) return(NULL)
+  if(!is.null(fam) && (sum(d$.ph == 1) < 3 || sum(d$.ph == 0) < 3)) return(NULL)
+  cn <- .kgVaryingCovs(d, covn)
+  rc <- if(length(cn)) paste0(" + ", paste(sprintf("`%s`", cn), collapse = " + ")) else ""
+  ff <- stats::as.formula(paste0(".ph ~ ", paste(xn, collapse = " + "), rc))
+  fr <- stats::as.formula(paste0(".ph ~ 1", rc))
+  if(is.null(fam)){
+    full <- try(stats::lm(ff, data = d), silent = TRUE); red <- try(stats::lm(fr, data = d), silent = TRUE)
+    if(inherits(full, "try-error") || inherits(red, "try-error")) return(NULL)
+    an <- try(stats::anova(red, full), silent = TRUE); if(inherits(an, "try-error")) return(NULL)
+    jEff <- summary(full)$r.squared - summary(red)$r.squared; jStat <- an$F[2]; jP <- an$`Pr(>F)`[2]
+    jType <- "jointR2change"; meth <- "joint lm"; pType <- "partialSlope"; sc <- "t value"; pc <- "Pr(>|t|)"
+  } else {
+    full <- suppressWarnings(try(stats::glm(ff, data = d, family = fam), silent = TRUE))
+    red  <- suppressWarnings(try(stats::glm(fr, data = d, family = fam), silent = TRUE))
+    if(inherits(full, "try-error") || inherits(red, "try-error") || !isTRUE(full$converged)) return(NULL)
+    lr <- red$deviance - full$deviance; dfx <- red$df.residual - full$df.residual
+    jStat <- lr; jP <- stats::pchisq(lr, dfx, lower.tail = FALSE)
+    jEff <- if(full$null.deviance > 0) lr / full$null.deviance else NA_real_
+    jType <- "jointDevianceChange"; meth <- "joint logistic"; pType <- "partialLogOR"; sc <- "z value"; pc <- "Pr(>|z|)"
+  }
+  co <- summary(full)$coefficients
+  if(!all(xn %in% rownames(co))) return(NULL)
+  # each feature's row is NAMED for what it is ("LDHA (LDHB held fixed)"), never the bare symbol: the bare symbol is that feature's own
+  # single-gene row, and a computed row of the same name would replace it downstream
+  lab <- vapply(seq_len(k), function(i) sprintf("%s (%s held fixed)", colnames(X)[i], paste(colnames(X)[-i], collapse = ", ")), character(1))
+  out <- data.frame(Symbol = lab, N = nrow(d), Effect = co[xn, "Estimate"], EffectType = pType,
+                    Stat = co[xn, sc], P = co[xn, pc], stringsAsFactors = FALSE)
+  out$Direction <- ifelse(out$Effect > 0, "up", "down")
+  out <- rbind(data.frame(Symbol = paste(colnames(X), collapse = "+"), N = nrow(d), Effect = jEff, EffectType = jType,
+                          Stat = jStat, P = jP, Direction = "NA", stringsAsFactors = FALSE), out)
+  out$Method <- meth
+  out
+}
+
 .kgSplitFeatures <- function(s, res){
   if(grepl("[;|]", s)) return(trimws(strsplit(s, "[;|]")[[1]]))
   if(nrow(res[res$token == .kgNorm(s), , drop = FALSE]) > 0) return(s)
@@ -218,6 +298,44 @@
 # (p10/p11, donor_clustering_pipeline_v2/outputs_basal_floor_case_study_20261011): a member enters when it
 # is measured in >= max(9, 90%) of the donors and varies; its remaining gaps take its own mean; >= 3 members.
 # A categorical phenotype is tested only as a two-level comparison (`lvl` vs `ref`, "rest" allowed).
+# ⚠ THE SET'S PER-DONOR SCORE FOR THE PAGE'S SET PLOT, DISPLAY ONLY (2026-10-23, user: "we need both gene level and the geneset level
+# plot", method "like your figure" = the case study's p23_data_block.R:33-35). fry gives one P and no score per donor, so the score
+# is the FIRST PRINCIPAL COMPONENT of the set's z-scored features (>= 90% present and varying, a missing value = the feature's mean),
+# signed to agree with their mean, in SD -- computed over every donor X carries, then kept for this test's donors. Each measure is
+# fitted on it with the same covariates (continuous: lm(measure ~ score + covariates), the slope is per SD of score; a group:
+# lm(score ~ group + covariates)); the plotted value is the measure adjusted for those covariates (residual + mean, as p24 draws it).
+# The set's ANSWER stays fry's P; this fit is only what the plot shows. NULL when it cannot be computed (the fry row is unaffected).
+.kgPcScores <- function(X, d, cn, ptype, lvl = ""){
+  tryCatch({
+    Xa <- X; storage.mode(Xa) <- "double"
+    k <- rowSums(!is.na(Xa)) >= max(9, 0.9 * ncol(Xa)) & apply(Xa, 1, function(v) isTRUE(stats::sd(v, na.rm = TRUE) > 0))
+    Xa <- Xa[k, , drop = FALSE]
+    if(nrow(Xa) < 3 || ncol(Xa) < 10) return(NULL)
+    if(anyNA(Xa)) Xa[is.na(Xa)] <- rowMeans(Xa, na.rm = TRUE)[row(Xa)[is.na(Xa)]]
+    Z <- t(scale(t(Xa)))
+    pc <- stats::prcomp(t(Z))$x[, 1]
+    if(isTRUE(stats::cor(pc, colMeans(Z)) < 0)) pc <- -pc
+    sc <- stats::setNames(as.numeric(scale(pc)), colnames(Z))
+    don <- intersect(rownames(d), names(sc))
+    if(length(don) < 10) return(NULL)
+    dd <- d[don, , drop = FALSE]; dd$.score <- sc[don]
+    covs <- if(length(cn)) paste(sprintf("`%s`", cn), collapse = " + ") else ""
+    if(ptype == "cont"){
+      f <- stats::lm(stats::as.formula(paste0(".ph ~ .score", if(nzchar(covs)) paste0(" + ", covs) else "")), data = dd); j <- ".score"
+      adj <- if(nzchar(covs)) stats::resid(stats::lm(stats::as.formula(paste0(".ph ~ ", covs)), data = dd)) + mean(dd$.ph) else dd$.ph
+    } else {
+      f <- stats::lm(stats::as.formula(paste0(".score ~ .ph", if(nzchar(covs)) paste0(" + ", covs) else "")), data = dd)
+      j <- paste0(".ph", lvl); adj <- rep(NA_real_, nrow(dd))
+    }
+    cf <- summary(f)$coefficients
+    ok <- j %in% rownames(cf)
+    data.frame(record_id = don, group = as.character(dd$.ph), score = signif(dd$.score, 5),
+               predicted = don %in% .GlobalEnv$.kg_pred_ids, adj = signif(as.numeric(adj), 6), score_kind = "pc1",
+               fit_est = if(ok) signif(cf[j, 1], 4) else NA_real_, fit_p = if(ok) signif(cf[j, 4], 4) else NA_real_,
+               fit_n = nrow(dd), n_features = nrow(Xa), stringsAsFactors = FALSE)
+  }, error = function(e) NULL)
+}
+
 .kgFrySet <- function(X, phv, cvd, ptype, lvl = "", ref = "", minN = 10){
   don <- intersect(colnames(X), names(phv))
   if(!is.null(cvd) && ncol(cvd)) don <- intersect(don, rownames(cvd))
@@ -248,7 +366,8 @@
             silent = TRUE)
   if(inherits(fr, "try-error") || !NROW(fr)) return(NULL)
   list(N = nrow(d), NGenes = nrow(Xs), Direction = as.character(fr$Direction[1]), P = as.numeric(fr$PValue[1]),
-       NPred = sum(rownames(d) %in% .GlobalEnv$.kg_pred_ids))
+       NPred = sum(rownames(d) %in% .GlobalEnv$.kg_pred_ids),
+       Scores = .kgPcScores(X, d, cn, ptype, lvl))                    # display only (see `.kgPcScores`)
 }
 
 .kgSetRow <- function(s, layer, ph, cvn, pt, contrast, subset_note, method = "fry")
@@ -329,7 +448,7 @@
                     layers = "all", covariates = "default",
                     subset = "all", contrast = "", ref = "",
                     fdr_family = "query", minN = "10", method = "auto",
-                    mode = "tool", set_test = ""){
+                    mode = "tool", set_test = "", groups = ""){   # `groups` LAST (W2b): every positional caller unaffected
   library(RSQLite); library(DBI)
   .kgSetPaths()
   minN <- suppressWarnings(as.integer(minN)); if(is.na(minN)) minN <- 10L
@@ -356,6 +475,20 @@
     }
   }
   m <- .kgLoadMetaFrame(level = cv2lv); if(is.null(m)) return("RES-NO-META")
+  # ⚠ TWO DONOR GROUPS MADE BY RULES (2026-11-05, W2b; user "New groups parameter") -- see `.kgRuleGroups`. MEASURED on
+  # live 8001: "Compare islets from obese and lean donors" ran nothing, because obese / lean are ranges of BMI and no column
+  # holds them as levels. The two labels become ONE new categorical column named after the rule's column
+  # ("bodymassindex_groups"), the comparison is "<first label>-<second label>", and every engine below runs its ordinary
+  # two-group fit on it unchanged -- the same move as one-vs-rest's "rest". `groups` replaces `phenotypes` and `contrast`.
+  # The rule's own column is never a covariate of the comparison (`grp_src`, `covcols_for`): obese vs lean adjusted for BMI
+  # would remove the very difference asked about. Empty `groups` = this block does nothing.
+  grp_src <- character(0)
+  if(nzchar(groups)){
+    g <- .kgRuleGroups(m, groups); if(is.null(g)) return("RES-NO-GROUPS")
+    gcol <- paste0(paste(g$src, collapse = "_"), "_groups")
+    m[[gcol]] <- g$values; phenotypes <- gcol; grp_src <- g$src
+    contrast <- paste0(g$labels[1], "-", g$labels[2]); ct_lvl <- g$labels[1]; ct_ref <- g$labels[2]
+  }
   meta_names <- names(m); rec <- as.character(m[["record_id"]])
 
   # ---- phenotypes: expand parents -> leaves; "all" -> all catalogue leaves ----
@@ -395,7 +528,7 @@
              else trimws(strsplit(covariates, "[,;]")[[1]])
   covuniv <- unique(covuniv[nzchar(covuniv) & covuniv %in% meta_names])
   covbase <- if(length(covuniv)){ cb <- .kgCoerce(m, covuniv); rownames(cb) <- rec; cb } else NULL
-  covcols_for <- function(ph) setdiff(covuniv, ph)
+  covcols_for <- function(ph) setdiff(covuniv, c(ph, grp_src))     # a rule's own column is never its covariate (W2b)
 
   # ---- phenotype values (coerced once) ----
   phframe <- .kgCoerce(m, phenos); rownames(phframe) <- rec
@@ -418,10 +551,16 @@
   # donors at the two compared levels and returns nothing unless both are present and they number >= minN together
   # (one-vs-rest: >= 3 in the named group first) -- so a layer could be "tested" on 218 donors and give no row.
   # MEASURED on F2 "How does CPA1 change in type 1 diabetes, in high-purity preparations only?": RNA-seq 218 donors, 0
-  # with type 1 diabetes; the answer said "not measured in any layer". With `groups = TRUE` (the targeted engine only;
-  # limma has its own one-class guard) a discrete phenotype asked as a named contrast writes the donors at each level
-  # (`N_level`, `N_ref`), `N_usable` = the two together, and `too_few_donors` under exactly `.kgLmCell`'s conditions.
-  # Every other row is written as before, with `N_level` / `N_ref` NA.
+  # with type 1 diabetes; the answer said "not measured in any layer". With `groups = TRUE` a discrete phenotype asked as a
+  # named contrast writes the donors at each level (`N_level`, `N_ref`), `N_usable` = the two together, and
+  # `too_few_donors` under exactly `.kgLmCell`'s conditions. Every other row is written as before, with `N_level` /
+  # `N_ref` NA.
+  # ⚠ EVERY ENGINE COUNTS THE GROUPS (2026-10-28, item 27b). The limma loops noted a layer without them, so a computed
+  # screen whose named group has no donors on a layer wrote no rows and the note still said `tested` -- MEASURED on live
+  # 8001: "Which pathways are dysregulated in MAID donors?" (no MAID donor carries alpha- or beta-cell data), fibrotic on
+  # beta cells, soft and Roche among the 37 metabolite donors; the answer said the layer "holds no stored comparison".
+  # When this rule says too few, `.kgLimmaFit` and `.kgKendallFit` return nothing too (one-vs-rest < 3 in the group, a
+  # group with no donors leaves one level, < 10 donors in all), so a layer with rows is never noted untested.
   .note_layer <- function(disp, dc, status = NULL, groups = FALSE){
     for(ph in phenos){
       v <- phframe[intersect(dc, rownames(phframe)), ph]
@@ -477,8 +616,51 @@
     # resolve each feature -> its layers. ANY entity type (gene | metabolite | contaminant |
     # reaction) -- the resolver carries the source table, and the model is the same.
     # ONE vectorised pass for the whole set (a per-token scan costs ~9ms each).
-    rmap <- .kgResolveFeatures(res, ftoks, "auto")
-    for(tk in ftoks){
+    # ⚠ A RATIO OF TWO GENES ("LDHA/LDHB", 2026-10-29; user: "same association as a gene ... only show the layer have both").
+    # The token is fitted as ONE value per donor, A minus B: the stored values are on a log scale, so the difference IS the log
+    # ratio. Only a layer that holds BOTH (the same layer table) gets the ratio; its two parts are resolved with the other tokens.
+    .rt <- grepl("^[^/]+/[^/]+$", ftoks)
+    .rparts <- unique(trimws(unlist(strsplit(ftoks[.rt], "/", fixed = TRUE))))
+    # ⚠ A COMBINED EFFECT ("LDHA+LDHB", 2026-10-30, item 2b): ONE model with every gene (`.kgJointCell`), only in a layer that
+    # measures them all. A token that is itself a feature name (a "+" inside a chemical's name) stays that feature.
+    .jt <- !.rt & grepl("^[^+]+(\\+[^+]+)+$", ftoks)
+    .jparts <- unique(trimws(unlist(strsplit(ftoks[.jt], "+", fixed = TRUE))))
+    rmap <- .kgResolveFeatures(res, unique(c(ftoks[!.rt], .rparts, .jparts)), "auto")
+    .jt <- .jt & vapply(ftoks, function(t){ r0 <- rmap[[.kgNorm(t)]]; is.null(r0) || length(r0$layers) == 0 }, logical(1))
+    for(tk in ftoks[.jt]){
+      pa <- trimws(strsplit(tk, "+", fixed = TRUE)[[1]])
+      rp <- lapply(pa, function(x) rmap[[.kgNorm(x)]])
+      if(any(vapply(rp, function(r) is.null(r) || length(r$layers) == 0 || is.na(r$type), logical(1)))) next
+      for(la in rp[[1]]$layers){
+        lk <- .kgLayerKey(la$display)
+        if(!(lk %in% .kgAllLayerKeys)) next
+        if(!is.null(lay_filter) && !(lk %in% lay_filter || .kgDisplayIn(la, lay_filter))) next
+        rv <- as.character(la$read_val); ok <- TRUE
+        for(r in rp[-1]){
+          lb <- Filter(function(x) identical(x$display, la$display) && identical(x$table, la$table) &&
+                         identical(x$read_col, la$read_col), r$layers)
+          if(length(lb) == 0){ ok <- FALSE; break }
+          rv <- c(rv, as.character(lb[[1]]$read_val))
+        }
+        if(ok) feats[[length(feats)+1]] <- list(token = tk, etype = rp[[1]]$type, layer = la, joint = rv)
+      }
+    }
+    for(tk in ftoks[.rt]){
+      pa <- trimws(strsplit(tk, "/", fixed = TRUE)[[1]])
+      ra <- rmap[[.kgNorm(pa[1])]]; rb <- rmap[[.kgNorm(pa[2])]]
+      if(is.null(ra) || is.null(rb) || length(ra$layers) == 0 || length(rb$layers) == 0 || is.na(ra$type)) next
+      for(la in ra$layers){
+        lk <- .kgLayerKey(la$display)
+        if(!(lk %in% .kgAllLayerKeys)) next
+        if(!is.null(lay_filter) && !(lk %in% lay_filter || .kgDisplayIn(la, lay_filter))) next
+        lb <- Filter(function(x) identical(x$display, la$display) && identical(x$table, la$table) &&
+                       identical(x$read_col, la$read_col), rb$layers)
+        if(length(lb) == 0) next
+        feats[[length(feats)+1]] <- list(token = tk, etype = ra$type, layer = la,
+                                         ratio = c(as.character(la$read_val), as.character(lb[[1]]$read_val)))
+      }
+    }
+    for(tk in ftoks[!.rt & !.jt]){
       r <- rmap[[.kgNorm(tk)]]
       if(is.null(r) || length(r$layers) == 0 || is.na(r$type)) next
       for(la in r$layers){
@@ -508,7 +690,8 @@
     key <- vapply(feats, function(f) paste(f$layer$display, f$layer$table, f$layer$read_col, sep = "@@"), character(1))
     for(k in unique(key)){
       idx <- which(key == k); la <- feats[[idx[1]]]$layer
-      read_vals <- unique(vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1)))
+      read_vals <- unique(c(vapply(feats[idx], function(f) as.character(f$layer$read_val), character(1)),
+                            unlist(lapply(feats[idx], function(f) c(f$ratio, f$joint)))))   # a ratio / combined reads all its genes
       FR <- .kgFeatureRows(con, la$table, la$read_col, read_vals, la$rowfilter); if(is.null(FR)) next
       dcommon <- intersect(colnames(FR$mat), keep_ids)
       .note_layer(la$display, dcommon, groups = TRUE)
@@ -539,8 +722,30 @@
       cellfun <- if(identical(meth, "kendall")) .kgKendallCell else .kgLmCell
 
       for(j in seq_along(idx)){
-        f  <- feats[[idx[j]]]; ri <- rpos[j]; if(is.na(ri)) next
-        y  <- FR$mat[ri, dcommon]; names(y) <- dcommon; sym <- FR$symbol[ri]
+        f  <- feats[[idx[j]]]
+        if(!is.null(f$joint)){                                   # COMBINED effect: one model, outcome ~ A + B (+ covariates)
+          ij <- match(f$joint, FR$id); if(anyNA(ij)) next
+          X <- t(FR$mat[ij, dcommon, drop = FALSE]); rownames(X) <- dcommon; colnames(X) <- FR$symbol[ij]
+          for(ph in phenos){
+            pp <- P[[ph]]
+            jr <- .kgJointCell(X, pp$phv, pp$cvd, pp$pt, ct_lvl, ct_ref, minN); if(is.null(jr)) next
+            for(q in seq_len(nrow(jr))) rows[[length(rows)+1]] <- data.frame(
+              Feature = f$token, Symbol = jr$Symbol[q], Entity = f$etype, Layer = la$display, Phenotype = ph,
+              N = jr$N[q], Effect = signif(jr$Effect[q], 3), EffectType = jr$EffectType[q],
+              Statistic = signif(jr$Stat[q], 3), P_value = signif(jr$P[q], 4), Direction = jr$Direction[q],
+              Covariates = if(length(pp$cvn)) paste(pp$cvn, collapse = ",") else "none",
+              Comparison = if(pp$pt == "disc") (if(nzchar(contrast)) contrast else "auto(two groups)") else "continuous",
+              Subset = subset_note, Method = jr$Method[q], stringsAsFactors = FALSE)
+          }
+          next
+        }
+        if(!is.null(f$ratio)){                                   # A minus B on the log scale = the log ratio (see above)
+          ia <- match(f$ratio[1], FR$id); ib <- match(f$ratio[2], FR$id); if(is.na(ia) || is.na(ib)) next
+          y <- FR$mat[ia, dcommon] - FR$mat[ib, dcommon]; names(y) <- dcommon; sym <- f$token
+        } else {
+          ri <- rpos[j]; if(is.na(ri)) next
+          y  <- FR$mat[ri, dcommon]; names(y) <- dcommon; sym <- FR$symbol[ri]
+        }
         for(ph in phenos){
           pp <- P[[ph]]; pt <- pp$pt; cvn <- pp$cvn
           cell <- cellfun(y, pp$phv, pp$cvd, pt, ct_lvl, ct_ref, minN); if(is.null(cell)) next
@@ -568,6 +773,7 @@
         for(ph in phenos){
           s <- .kgFrySet(sx, P[[ph]]$phv, P[[ph]]$cvd, P[[ph]]$pt, ct_lvl, ct_ref, minN)
           if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, la$display, ph, P[[ph]]$cvn, P[[ph]]$pt, contrast, subset_note)
+          set_scores[[length(set_scores)+1]] <- .kgSetScores(s, la$display, ph)
         }
       }
     }
@@ -614,7 +820,7 @@
     for(w in work){
       L <- .kgLoadLayerMatrix(con, w$tbl, w$id, w$rowfilter); if(is.null(L)) next
       dcommon <- intersect(colnames(L$mat), keep_ids)
-      .note_layer(w$disp, dcommon)
+      .note_layer(w$disp, dcommon, groups = TRUE)
       if(length(dcommon) < minN) next
       Lmat <- L$mat[, dcommon, drop = FALSE]
       ent   <- w$ent
@@ -681,18 +887,25 @@
     }
   }
 
-  # ===================== DNA METHYLATION (per CpG; ALWAYS the full-layer limma fit) =====================
+  # ===================== DNA METHYLATION (per CpG) =====================
   # The same fit the limma engine runs (`.kgLimmaFit`: trend + robust eBayes, the question's covariates, constant ones
-  # dropped), on EVERY CpG of the key, then the named CpGs extracted -- never subset-then-fit, so the variance prior comes
-  # from the whole layer. A named set's CpGs also get the group test (fry), exactly as on the other layers.
+  # dropped). A call that NAMES features fits EVERY CpG of the key, then extracts the named CpGs -- never subset-then-fit, so
+  # the variance prior comes from the whole layer; a named set's CpGs also get the group test (fry). An open SCREEN fits the
+  # `.kgMethScreenTop` most variable CpGs (2026-10-23, see the constant).
   for(mk in meth_keys){
     L <- .kgLoadMethylation(mk); if(is.null(L)) next
     keep <- if(is_screen) NULL else .kgMethRows(L, ftoks)
     dcommon <- intersect(colnames(L$mat), keep_ids)
     if(!is_screen && !length(keep)){ .note_layer(L$disp, dcommon, status = "no_feature"); next }
-    .note_layer(L$disp, dcommon)
+    .note_layer(L$disp, dcommon, groups = TRUE)
     if(length(dcommon) < minN) next
-    Lmat <- L$mat[, dcommon, drop = FALSE]
+    Lmat <- L$mat[, dcommon, drop = FALSE]; Linfo <- L$info
+    if(is_screen && nrow(Lmat) > .kgMethScreenTop){
+      sdv <- if(requireNamespace("matrixStats", quietly = TRUE)) matrixStats::rowSds(Lmat, na.rm = TRUE)
+             else apply(Lmat, 1, stats::sd, na.rm = TRUE)
+      top <- sort(order(sdv, decreasing = TRUE, na.last = TRUE)[seq_len(.kgMethScreenTop)])
+      Lmat <- Lmat[top, , drop = FALSE]; Linfo <- L$info[top, , drop = FALSE]   # `.kgLimmaFit` aligns them by position
+    }
     for(ph in phenos){
       pt  <- .kgPhenoType(m, ph)
       cvn <- covcols_for(ph)
@@ -709,15 +922,16 @@
         s <- .kgFrySet(Lmat[keep, , drop = FALSE], stats::setNames(md[[ph]], rownames(md)),
                        if(length(cvn)) md[, cvn, drop = FALSE] else NULL, pt, ct_lvl, ct_ref, minN)
         if(!is.null(s)) set_rows[[length(set_rows)+1]] <- .kgSetRow(s, L$disp, ph, cvn, pt, contrast, subset_note)
+        set_scores[[length(set_scores)+1]] <- .kgSetScores(s, L$disp, ph)
       }
       if(pt == "disc"){
         pc <- parse_contrast(); rr <- pc$r
         lv <- levels(factor(as.character(md[[ph]])))
         if(length(lv) < 2){ one.class <- TRUE; next }
         if(identical(pc$c, "anova") && !nzchar(rr)) rr <- lv[1]
-        de <- .kgLimmaFit(Lmat, L$info, md, ph, pt, ref = rr, contrast = pc$c)
+        de <- .kgLimmaFit(Lmat, Linfo, md, ph, pt, ref = rr, contrast = pc$c)
       } else {
-        de <- .kgLimmaFit(Lmat, L$info, md, ph, pt, "", "")
+        de <- .kgLimmaFit(Lmat, Linfo, md, ph, pt, "", "")
       }
       if(is.null(de) || nrow(de) == 0) next
       if(!is.null(keep)){
@@ -761,12 +975,17 @@
                        Effect = numeric(0), N_layer = integer(0), N_predicted = integer(0))
     so$P_family <- if(nrow(so)) signif(stats::p.adjust(so$P_value, method = "BH"), 4) else numeric(0)
     utils::write.csv(so, "kg_assoc_set.csv", row.names = FALSE)
-    # the relative test's per-donor scores (2026-10-19), its OWN file so nothing above changes; empty when none was computed
-    if(identical(set_kind, "relative")){
+    # the set test's per-donor scores, its OWN file so nothing above changes; empty when none was computed: the relative test's
+    # own score (2026-10-19) and, for fry, the display-only PC1 score (`.kgPcScores`, 2026-10-23). Each donor's cluster rides
+    # beside it (the meta frame's `cluster_v2`, '' when none) so the page can colour the donors.
+    if(do_set){
       set_scores <- Filter(Negate(is.null), set_scores)
       sc <- if(length(set_scores)) do.call(rbind, set_scores) else
               data.frame(Layer = character(0), Phenotype = character(0), record_id = character(0), group = character(0),
                          score = numeric(0), predicted = logical(0))
+      if(nrow(sc) && "cluster_v2" %in% names(m)){
+        cl <- as.character(m$cluster_v2[match(as.character(sc$record_id), rec)]); cl[is.na(cl)] <- ""; sc$cluster <- cl
+      }
       utils::write.csv(sc, "kg_assoc_setscore.csv", row.names = FALSE)
     }
   }
@@ -783,8 +1002,14 @@
   out <- do.call(rbind, rows)
 
   # ---- family FDR (default #1: BH across exactly the tests asked; never genome-wide) ----
+  # ⚠ EACH KIND IS ITS OWN FAMILY (2026-10-29, item 32; user: "gene is gene", "correct each kind separately"). The family was
+  # every row of the call, so a gene's bar depended on the metabolite and contaminant tests the same call ran — MEASURED on
+  # live "Which genes differ in DCD donors?" (DCD-rest, 9 layers): 645 metabolite + 117 contaminant tests in the gene family,
+  # RNA-seq 412 significant vs 415 with genes alone. The kind is the row's own `Entity` (gene — RNA-seq, protein, Nanostring,
+  # pseudobulk — metabolite, contaminant, cpg, reaction); a call of one kind is unchanged.
   if(identical(fdr_family, "query")){
-    out$P_family <- signif(stats::p.adjust(out$P_value, method = "BH"), 4)
+    .kind <- as.character(out$Entity); .kind[is.na(.kind) | !nzchar(.kind)] <- "unknown"
+    out$P_family <- signif(stats::ave(out$P_value, .kind, FUN = function(p) stats::p.adjust(p, method = "BH")), 4)
   } else if(identical(fdr_family, "genomewide") && "Adjusted_p_value" %in% names(out)){
     out$P_family <- out$Adjusted_p_value
   }
@@ -801,7 +1026,14 @@
 # R error comes back as "RES-ERR;<fn>;<message>" instead of a null -> empty HTTP body.
 # Every RES-OK / RES-NO* / RES-TOO-* RETURN passes through untouched: tryCatch sees
 # conditions, not return values, so "no data" and "crashed" stay distinct answers.
-kgAssoc <- function(...) .kgGuard("kgAssoc", .kgAssocImpl, ...)
+# SPEED (2026-11-02): the servlet sources these scripts afresh for every call, so R's byte-code compiler (JIT) compiled
+# them again on every call (~1.5 s of a 5 s call). It is off for the length of this call only, then set back. Results are the
+# same (mig_qc/time_kgassoc_jit_shapes_20261102*.log: 7 kinds of call, same output files).
+kgAssoc <- function(...){
+  .jit <- compiler::enableJIT(0)
+  on.exit(compiler::enableJIT(.jit), add = TRUE)
+  .kgGuard("kgAssoc", .kgAssocImpl, ...)
+}
 
 # ---- SEVERAL NAMED SETS IN ONE CALL (2026-10-22, user: "go ahead with running several sets in one R call") -------------
 # A question naming several sets ("Are Hippo and Wnt pathway promoters less methylated than other gene promoters in Cluster 2

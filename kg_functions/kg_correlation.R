@@ -333,7 +333,7 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
 .kgPhenoGroupImpl <- function(grouping, levels = "", phenotypes = "all",
                          covariates = "NA", use_raw = "false",
                          minN = "10", method = "auto", mode = "tool",
-                         subset = "all"){   # `subset` LAST: positional callers unaffected
+                         subset = "all", groups = ""){   # `subset`, then `groups` (W2b) LAST: positional callers unaffected
   minN <- suppressWarnings(as.integer(minN)); if(is.na(minN)) minN <- 10L
   method <- tolower(method)
 
@@ -351,9 +351,21 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
     j <- match(.kgNorm(tok), col_lc); if(!is.na(j)) return(names(m)[j]); NA_character_
   }
 
-  gcol <- resolve_col(grouping); if(is.na(gcol)) return("RES-NO-RESOLVE")
-  rid  <- as.character(m[["record_id"]])
-  grp  <- as.character(m[[gcol]])
+  # ⚠ TWO DONOR GROUPS MADE BY RULES (2026-11-05, W2b; user "New groups parameter") -- see `.kgRuleGroups`. MEASURED on live
+  # 8001: "What phenotypes are different between obese and lean donors?" ran no screen, because obese / lean are ranges of BMI
+  # and no column holds them as levels. The labels ARE the groups and `levels` (in the rule's order); `gcol` is the rule's own
+  # column, so BMI is neither screened (it differs by construction) nor a covariate (`grp_src`). Empty `groups` = as before.
+  grp_src <- character(0)
+  if(nzchar(groups)){
+    g <- .kgRuleGroups(m, groups); if(is.null(g)) return("RES-NO-GROUPS")
+    gcol <- resolve_col(g$src[1]); if(is.na(gcol)) return("RES-NO-RESOLVE")
+    rid  <- as.character(m[["record_id"]])
+    grp  <- g$values; levels <- paste(g$labels, collapse = ","); grp_src <- g$src
+  } else {
+    gcol <- resolve_col(grouping); if(is.na(gcol)) return("RES-NO-RESOLVE")
+    rid  <- as.character(m[["record_id"]])
+    grp  <- as.character(m[[gcol]])
+  }
 
   # restrict to requested levels (pairwise); empty = ALL non-blank levels (omnibus)
   want <- if(identical(levels,"") || is.null(levels)) character(0) else trimws(strsplit(levels, ",")[[1]])
@@ -374,12 +386,12 @@ kgFeatureCorr <- function(var_id_a, var_id_b,
   if(length(grp) < minN) return("RES-NO")
 
   cov_names <- if(identical(covariates,"NA") || covariates == "") character(0) else trimws(strsplit(covariates, ",")[[1]])
-  cov_names <- cov_names[cov_names %in% names(m) & cov_names != gcol]
+  cov_names <- cov_names[cov_names %in% names(m) & cov_names != gcol & !(cov_names %in% grp_src)]
   cov.df <- NULL
   if(length(cov_names) > 0){ cov.df <- .kgCoerce(m[keep, , drop = FALSE], cov_names); rownames(cov.df) <- rid }
 
   if(identical(phenotypes,"all") || phenotypes == ""){
-    cand <- setdiff(names(m), c("record_id", gcol, cov_names))
+    cand <- setdiff(names(m), c("record_id", gcol, cov_names, grp_src))
     # continuous AND categorical phenotypes, as the Donor Cluster Explorer tests both (user 2026-10-19: "make all same as
     # cluster page"); a categorical one is tested by chi-square below
     phen_cols <- cand[vapply(cand, function(cc) .kgInferType(m[[cc]]) %in% c("cont", "disc"), logical(1))]

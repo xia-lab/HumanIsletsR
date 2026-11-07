@@ -140,6 +140,14 @@
 .kgEnrichDefaultCovs <- c("donorage", "donorsex", "bodymassindex",
                           "predistributionculturetime")   # purity dropped 2026-09-04 to match the precompute default (4 covariates)
 
+# ⚠ SMALL-SAMPLE LAYERS ARE FITTED WITHOUT THE DEFAULT COVARIATES (2026-10-28, item 27). kgAssoc drops the DEFAULT set for entity
+# types whose donor n is too small to spend it (kg_assoc.R `.kgSmallNTypes`: metabolite ~37 donors, contaminants ~31) and writes
+# Covariates = "none" for them. The user-folder match expected the 4 default covariates, so every COMPUTED comparison answered
+# RES-NO-DIFFERENTIAL on the metabolite layers (MEASURED on live 8001, 10-28: DCD-NDD, MAID-rest, Roche-VitaCyte ... 215 rows
+# each, all rejected). The user folder is now matched on what kgAssoc fits for the same request. An explicit covariate list is
+# unchanged (kgAssoc honours it on every layer), and so is the precompute check.
+.kgEnrichSmallNEntities <- c("metabolite", "contaminant")
+
 # layer key -> precompute Omics_ID + annotation table + id column + entity class.
 # ⚠ protein and metabolite are the _combat tables (user ruling 2026-07-20).
 #
@@ -175,9 +183,12 @@
     # `_omics_token` in api/routes/agent.py, which returns None for single-cell on purpose.
     "pbrna_delta"      = list(omics_id="proc_pbrna_Delta",      tbl="proc_pbrna_Delta",             id="symbol",    entity="gene"),
     "pbrna_pp"         = list(omics_id="proc_pbrna_PP",         tbl="proc_pbrna_PP",                id="symbol",    entity="gene"),
-    "metabolite_hg"    = list(omics_id="proc_metabolite_HG",    tbl="proc_metabolite_combat_HG",    id="inchikey",  entity="metabolite"),
-    "metabolite_lg"    = list(omics_id="proc_metabolite_LG",    tbl="proc_metabolite_combat_LG",    id="inchikey",  entity="metabolite"),
-    "metabolite_ratio" = list(omics_id="proc_metabolite_ratio", tbl="proc_metabolite_combat_ratio", id="inchikey",  entity="metabolite"),
+    # `screen_id` (2026-10-28, item 27): the column kgAssoc's SCREEN writes in `Feature` for this table (kg_assoc.R
+    # `.kgScreenLayer`: `compound`). The layer is keyed on `inchikey`, so a computed differential is translated through the
+    # table's own rows (`.kgEnrichFromUserFolder`). The precompute already stores inchikey and is read as before.
+    "metabolite_hg"    = list(omics_id="proc_metabolite_HG",    tbl="proc_metabolite_combat_HG",    id="inchikey",  entity="metabolite", screen_id="compound"),
+    "metabolite_lg"    = list(omics_id="proc_metabolite_LG",    tbl="proc_metabolite_combat_LG",    id="inchikey",  entity="metabolite", screen_id="compound"),
+    "metabolite_ratio" = list(omics_id="proc_metabolite_ratio", tbl="proc_metabolite_combat_ratio", id="inchikey",  entity="metabolite", screen_id="compound"),
     # DNA methylation (2026-10-19): one row per CpG, mapped to genes by the collaborator's CpG map (`.kgMethylEnrich`).
     # Never precomputed (no omics_id); the differential is always this answer's own screen in its user folder.
     "methylation"          = list(omics_id=NA_character_, tbl=NA_character_, id="cpg", entity="gene", methyl=TRUE),
@@ -301,11 +312,30 @@
     keep <- !is.na(sym) & nzchar(sym) & sym != "NA"
     ids[keep] <- sym[keep]
   }
-  data.frame(FeatureId = ids,
+  # ⚠ THE SCREEN'S ID -> THE LAYER'S KEY (2026-10-28, item 27). A metabolite screen writes `compound` (the table's row id), the
+  # layer is keyed on `inchikey`: each compound is translated through the SAME table's row (by id, never by matching names
+  # across sources). An id that is already a key is kept; one with no key is dropped (it could not be enriched anyway).
+  lk <- .kgEnrichLayer(layer_key)
+  if(!is.null(lk$screen_id) && !identical(lk$screen_id, lk$id)){
+    .kgSetPaths()
+    con <- try(DBI::dbConnect(RSQLite::SQLite(), paste0(sqlite.path, "HI_omics_v2.sqlite"), flags = RSQLite::SQLITE_RO),
+               silent = TRUE)
+    if(inherits(con, "try-error")) return(NULL)
+    mp <- try(DBI::dbGetQuery(con, sprintf('SELECT "%s" AS s, "%s" AS k FROM "%s"', lk$screen_id, lk$id, lk$tbl)), silent = TRUE)
+    try(DBI::dbDisconnect(con), silent = TRUE)
+    if(inherits(mp, "try-error") || is.null(mp) || nrow(mp) == 0) return(NULL)
+    mp <- mp[!is.na(mp$k) & nzchar(mp$k) & mp$k != "NA" & !duplicated(mp$s), , drop = FALSE]
+    to.key <- stats::setNames(as.character(mp$k), as.character(mp$s))
+    ids <- ifelse(ids %in% mp$k, ids, unname(to.key[ids]))
+  }
+  out <- data.frame(FeatureId = ids,
              Effect    = suppressWarnings(as.numeric(d$Effect)),
              P_value   = suppressWarnings(as.numeric(d$P_value)),
              Adjusted_p_value = suppressWarnings(as.numeric(adj)),
              stringsAsFactors = FALSE)
+  out <- out[!is.na(out$FeatureId) & nzchar(out$FeatureId), , drop = FALSE]
+  if(nrow(out) == 0) return(NULL)
+  out
 }
 
 # ---- source 2: the PRECOMPUTE (omics_outcomes) --------------------------------
@@ -343,7 +373,10 @@
   # ---- get the differential; NEVER compute one ----
   de <- NULL; src <- NA_character_
   if(input %in% c("auto", "userfolder")){
-    uf <- .kgEnrichFromUserFolder(phenotype, omics_layer, contrast, cov.expected)
+    # a small-sample layer asked for "default" holds what kgAssoc fitted for it: no covariates (`.kgEnrichSmallNEntities`)
+    cov.uf <- if(identical(covariates, "default") && isTRUE(lp$entity %in% .kgEnrichSmallNEntities)) character(0)
+              else cov.expected
+    uf <- .kgEnrichFromUserFolder(phenotype, omics_layer, contrast, cov.uf)
     if(is.character(uf)) return(uf)                 # RES-NO-UNIVERSE
     if(!is.null(uf)){ de <- uf; src <- "userfolder" }
   }

@@ -707,7 +707,15 @@
     valid <- !is.na(pc) & pc != "" & pc != "NA"
     lv    <- unique(pc[valid])
     named <- nzchar(contrast) && !identical(contrast, "anova")
-    if(named || length(lv) == 2){
+    # ⚠ ONE-VS-REST — `ref = "rest"` IS A RESERVED TOKEN, NOT A LEVEL (2026-10-29, item 29). Same rule as `.kgLimmaFit` and
+    # `.kgLmCell`: the named group is 1 and every other MEASURED donor is 0 (an unmeasured donor stays NA). Coded as a level,
+    # no donor carried "rest", one level was left and every X-rest call wrote no contaminant rows — MEASURED on live
+    # kg_assoc.csv: DCD-rest (3 DCD donors), C2-rest (11) and VitaCyte-rest (24) held no 'Environmental contaminants' rows
+    # while the layer note said tested. The floor is the same >= 3 in the named group. Inert for every other call.
+    if(named && identical(ref, "rest")){
+      if(sum(valid & pc == contrast) < 3) return(NULL)
+      x <- ifelse(valid, ifelse(pc == contrast, 1L, 0L), NA_integer_)
+    } else if(named || length(lv) == 2){
       if(named){ a <- contrast; b <- ref } else { a <- lv[1]; b <- lv[2] }
       x <- ifelse(pc == a, 1L, ifelse(pc == b, 0L, NA_integer_))
     } else {
@@ -944,4 +952,36 @@
   }
   keep[is.na(keep)] <- FALSE
   m[keep, , drop = FALSE]
+}
+
+# ------------------------------------------------------------------------------------------------
+# .kgRuleGroups -- TWO DONOR GROUPS MADE BY RULES (2026-11-05, W2b; user "New groups parameter").
+# ------------------------------------------------------------------------------------------------
+# `groups` is "<label>:<filter>;<label>:<filter>", each filter in `.kgDonorSubset`'s own form, e.g.
+# "obese:bodymassindex>=30;lean:bodymassindex<25" -- the approved cut-offs (user 2026-09-04, kept in the engine's
+# kg_retrieval.DONOR_SUBSET_AUTHORED). No cut-off is chosen here; the caller sends the rule.
+# Returns list(values = one label or NA per row of `m`, labels = the two labels in order, src = the filters' columns),
+# or NULL meaning refuse (callers return RES-NO-GROUPS): not exactly two parts, a label that is not a plain word or is
+# used twice, a filter `.kgDonorSubset` cannot apply or that keeps no donor, or a donor in BOTH groups.
+# -- A DONOR IN NEITHER GROUP IS NA, so it is left out (BMI 25-30 for obese vs lean), never folded into a group --
+#    the same rule as one-vs-rest's NA ("NA STAYS NA", `.kgLimmaFit`).
+# -- ONE PARSER: each filter goes through `.kgDonorSubset`, so a threshold is read on the raw scale exactly as a donor
+#    subset is.
+.kgRuleGroups <- function(m, groups){
+  if(is.null(groups) || !nzchar(trimws(groups))) return(NULL)
+  parts <- trimws(strsplit(groups, ";", fixed = TRUE)[[1]]); parts <- parts[nzchar(parts)]
+  if(length(parts) != 2 || !("record_id" %in% names(m))) return(NULL)
+  rid  <- as.character(m[["record_id"]])
+  vals <- rep(NA_character_, nrow(m)); labs <- character(0); src <- character(0)
+  for(p in parts){
+    k <- regexpr(":", p, fixed = TRUE); if(k < 2) return(NULL)
+    lab <- trimws(substr(p, 1, k - 1)); flt <- trimws(substr(p, k + 1, nchar(p)))
+    if(!grepl("^[A-Za-z][A-Za-z0-9_]*$", lab) || lab %in% labs) return(NULL)
+    ms <- .kgDonorSubset(m, flt); if(is.null(ms) || nrow(ms) == 0) return(NULL)
+    hit <- rid %in% as.character(ms[["record_id"]])
+    if(any(hit & !is.na(vals))) return(NULL)                 # a donor in both groups: the two rules overlap
+    vals[hit] <- lab; labs <- c(labs, lab)
+    src <- c(src, trimws(regmatches(flt, regexec("^\\s*([^><=]+?)\\s*(>=|<=|=|>|<)", flt))[[1]][2]))
+  }
+  list(values = vals, labels = labs, src = unique(src[!is.na(src) & nzchar(src)]))
 }

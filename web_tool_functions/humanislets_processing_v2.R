@@ -246,7 +246,7 @@ redcap_export_fun <- function(api_token,
   donor$diagnosis[donor$T1_diabetes == "0" & donor$T2_diabetes == "0"] <- "None"
   donor$diagnosis_computed <- donor$diagnosis
   h <- as.numeric(donor$hba1c)
-  donor$diagnosis_computed[donor$diagnosis == "None" & h > 6.5] <- "Type2"
+  donor$diagnosis_computed[donor$diagnosis == "None" & h >= 6.5] <- "Type2"
   donor$diagnosis_computed[donor$diagnosis == "None" & h < 6.5 & h > 5.7] <- "Pre.T2D"
   donor$yearsdiabetic <- demographics$yearsdiabetic[match(donor$record_id, demographics$record_id)]
   donor$yearsdiabetic[donor$yearsdiabetic == "unknown"] <- NA
